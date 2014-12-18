@@ -80,9 +80,14 @@ def main():
         except RSA.RSAError:
             module.fail_json(msg="not a valid RSA key")
 
+    try:
+        encrypted_password = ec2.get_password_data(instance_id, False)
+    except boto.exception.EC2ResponseError:
+        module.fail_json(msg="ec2 response error. Invalid instance-id?")
+
     # Query for the instance id and then decrypt it
     try:
-        password = private_key.private_decrypt(base64.decodestring(ec2.get_password_data(instance_id, False)), RSA.pkcs1_padding)
+        password = private_key.private_decrypt(base64.decodestring(encrypted_password), RSA.pkcs1_padding)
     except RSA.RSAError:
         module.fail_json(msg="An RSA error occurred. The private key is probably incorrect.")
     except:

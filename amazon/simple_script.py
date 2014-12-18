@@ -1,3 +1,5 @@
+#!/usr/bin/python
+
 import boto.ec2
 import base64
 from M2Crypto import RSA
