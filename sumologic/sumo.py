@@ -55,17 +55,28 @@ class LinuxSumo(Sumo):
         else:
             # do the install
             if platform.machine() == 'i386': # 32-bit
-                rc, out, err = self.module.run_command("curl https://collectors.sumologic.com/rest/download/linux/32 -O;chmod +x 32;bash 32 -q")
-                #os.system("curl https://collectors.sumologic.com/rest/download/linux/32 | bash /dev/stdin -q")
-            elif platform.machine() == 'x86_64': # 64-bit
-                rc, out, err = self.module.run_command("curl https://collectors.sumologic.com/rest/download/linux/64 -o /tmp/sumo-install.sh --connect-timeout 60")
+                rc, out, err = self.module.run_command("curl https://collectors.sumologic.com/rest/download/linux/32 -o /tmp/sumo-install.sh --connect-timeout 30")
                 try:
                     if rc != 0:
-                        raise Exception("There was a problem downloading the collector")
+                        raise EnvironmentError("There was a problem downloading the collector")
                     rc, out, err = self.module.run_command("chmod +x /tmp/sumo-install.sh")
                     rc, out, err = self.module.run_command("bash /tmp/sumo-install.sh -q")
                     if rc != 0:
-                        raise: Exception("There was a problem installing the collector")
+                        raise EnvironmentError("There was a problem installing the collector")
+                    self.changed = True
+                    self.out = out
+                    self.err = err
+                finally:
+                    self.module.run_command("rm -f /tmp/sumo-install.sh")
+            elif platform.machine() == 'x86_64': # 64-bit
+                rc, out, err = self.module.run_command("curl https://collectors.sumologic.com/rest/download/linux/64 -o /tmp/sumo-install.sh --connect-timeout 30")
+                try:
+                    if rc != 0:
+                        raise EnvironmentError("There was a problem downloading the collector")
+                    rc, out, err = self.module.run_command("chmod +x /tmp/sumo-install.sh")
+                    rc, out, err = self.module.run_command("bash /tmp/sumo-install.sh -q")
+                    if rc != 0:
+                        raise EnvironmentError("There was a problem installing the collector")
                     self.changed = True
                     self.out = out
                     self.err = err
@@ -81,8 +92,8 @@ class LinuxSumo(Sumo):
         else:
             # do the uninstall
             rc, out, err = self.module.run_command("/bin/bash /opt/SumoCollector/uninstall -q")
-            #os.system("/bin/bash /opt/SumoCollector/uninstall -q")
-            #shutil.rmtree("/opt/SumoCollector/")
+            if rc != 0:
+                raise EnvironmentError("There was a problem uninstalling the collector")
             self.changed = True
 
 
@@ -115,7 +126,9 @@ def main():
         module.exit_json(**result)
 
     except RuntimeError as e:
-        module.fail_json(msg=e)
+        module.fail_json(msg=str(e))
+    except EnvironmentError as e:
+        module.fail_json(msg=str(e))
 
 
 # import module snippets
