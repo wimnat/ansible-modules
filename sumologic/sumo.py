@@ -3,6 +3,8 @@
 import platform
 import os
 import shutil
+import urllib2
+import base64
 
 class Sumo(object):
 
@@ -19,7 +21,8 @@ class Sumo(object):
         self.password   = module.params['password']
         self.accessid   = module.params['accessid']
         self.accesskey  = module.params['accesskey']
-        self.sources    = module.prarms['sources']
+        self.sources    = module.params['sources']
+        self.syncSources    = module.params['syncSources']
         self.override   = module.params['override']
         self.ephemeral  = module.params['ephemeral']
         self.clobber    = module.params['clobber']
@@ -35,18 +38,60 @@ class Sumo(object):
     def uninstall(self):
         return self.uninstall()
     
+    def api_create_request(self, url):
+
+        print url
+        base64string = base64.b64encode(self.accessid + ":" + self.accesskey)
+        headers = {'content-type': 'application/json', 'Authorization': 'Basic %s' % base64string}
+        return urllib2.Request(url, None, headers)
+
+    def api_get_collectors(self):
+
+        req = self.api_create_request("https://api.sumologic.com/api/v1/collectors")
+        response = urllib2.urlopen(req)
+        data = json.load(response)
+        print data
+
+
     def api_delete_collector(self, collectorId):
-        
-        password_mgr = urllib2.HTTPPasswordMgrWithDefaultRealm()
-        password_mgr.add_password(None, "https://api.sumologic.com/api/v1", self.accessid, self.accesskey)
-        
-        
-        url = "https://api.sumologic.com/api/v1/collectors/" + collectorId
-        headers = {'content-type': 'application/json'}
-        urllib2.install_opener(urllib2.build_opener(urllib2.HTTPHandler, urllib2.HTTPBasicAuthHandler(password_mgr)))
-        req = urllib2.Request(url, None, headers)
+
+        base64string = base64.b64encode(self.accessid + ":" + self.accesskey)
+        opener = urllib2.build_opener(urllib2.HTTPHandler)
+        headers = {'Authorization': 'Basic %s' % base64string}
+        req = urllib2.Request("https://api.sumologic.com/api/v1/collectors/" + collectorId + "/", None, headers)
+
+
+        #req = self.api_create_request("https://api.sumologic.com/api/v1/collectors/" + collectorId)
         req.get_method = lambda: 'DELETE'
-        response, info = urllib2.urlopen(req)
+        response = urllib2.urlopen(req)
+        data = json.load(response)
+        print data
+        
+    def sumo_conf(self, path):
+        
+        # Create sumo.conf file
+        f = open(path, 'w+')
+        # Write each conf value to file
+        if self.name:
+            f.write("name=" + self.name + "\n")
+        if self.email:
+            f.write("email=" + self.email + "\n")
+        if self.password:
+            f.write("password=" + self.password + "\n")
+        if self.accessid:
+            f.write("accessid=" + self.accessid + "\n")
+        if self.accesskey:
+            f.write("accesskey=" + self.accesskey + "\n")
+        if self.sources:
+            f.write("sources=" + self.sources + "\n")
+        if self.syncSources:
+            f.write("syncSources=" + self.syncSources + "\n")
+        if self.override:
+            f.write("override=" + str(self.override) + "\n")
+        if self.ephemeral:
+            f.write("ephemeral=" + str(self.ephemeral) + "\n")
+        if self.clobber:
+            f.write("clobber=" + str(self.clobber) + "\n")
         
 
 class WindowsSumo(Sumo):
@@ -63,7 +108,11 @@ class WindowsSumo(Sumo):
 
 class LinuxSumo(Sumo):
     platform = 'Linux'
+    conf_path = "/etc/sumo.conf"
     distribution = None
+
+    def set_sumo_conf(self):
+        self.sumo_conf(self.conf_path)
 
     def is_installed(self):
         if os.path.exists("/opt/SumoCollector/collector"):
@@ -94,8 +143,9 @@ class LinuxSumo(Sumo):
                 self.err = err
             finally:
                 self.module.run_command("rm -f /tmp/sumo-install.sh")
-                
+            
             # If clean flag True then delete the created collector so it can be recreated when necessary
+            print self.clean
             if self.clean == True:
                 # Stop the collector
                 self.module.run_command("service collector stop")
@@ -109,6 +159,7 @@ class LinuxSumo(Sumo):
                 # Delete the local creds
                 os.remove("/opt/SumoCollector/config/creds/main.properties")
                 # Delete the collector via the Sumo API
+                print "collector id = " + collectorId
                 self.api_delete_collector(collectorId)
                 
 
@@ -129,18 +180,24 @@ def main():
 
     module = AnsibleModule(
         argument_spec = dict(
-            state = dict(required=True, choices=['present', 'absent'], type='str')
-            clean = dict(default="no", type='bool')
-            name = dict(type='str')
-            email = dict(type='str')
-            password = dict(type='str')
-            accessid = dict(type='str')
-            accesskey = dict(type='str')
-            sources = dict(type'str')
-            override = dict(type='bool')
-            ephemeral = dict(type='bool')
+            state = dict(required=True, choices=['present', 'absent'], type='str'),
+            clean = dict(default="no", type='bool'),
+            name = dict(type='str'),
+            email = dict(type='str'),
+            password = dict(type='str'),
+            accessid = dict(type='str'),
+            accesskey = dict(type='str'),
+            sources = dict(type='str'),
+            syncSources = dict(type='str'),
+            override = dict(type='bool'),
+            ephemeral = dict(type='bool'),
             clobber = dict(type='bool')
         ),
+        mutually_exclusive = [ 
+                               ['email', 'accessid'],
+                               ['password', 'accesskey'],
+                               ['sources', 'syncSources']
+                             ],
         supports_check_mode=False
     )
 
@@ -152,7 +209,9 @@ def main():
 
         if sumo.state == 'present':
             result['do_install'] = "yes"
-            sumo.install()
+            sumo.api_delete_collector("100010919")
+            #sumo.set_sumo_conf()
+            #sumo.install()
         elif sumo.state == 'absent':
             sumo.uninstall()
 
