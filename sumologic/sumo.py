@@ -5,6 +5,7 @@ import os
 import shutil
 import urllib2
 import base64
+import hashlib
 
 class Sumo(object):
 
@@ -69,29 +70,39 @@ class Sumo(object):
         
     def sumo_conf(self, path):
         
-        # Create sumo.conf file
-        f = open(path, 'w+')
-        # Write each conf value to file
-        if self.name:
-            f.write("name=" + self.name + "\n")
-        if self.email:
-            f.write("email=" + self.email + "\n")
-        if self.password:
-            f.write("password=" + self.password + "\n")
-        if self.accessid:
-            f.write("accessid=" + self.accessid + "\n")
-        if self.accesskey:
-            f.write("accesskey=" + self.accesskey + "\n")
-        if self.sources:
-            f.write("sources=" + self.sources + "\n")
-        if self.syncSources:
-            f.write("syncSources=" + self.syncSources + "\n")
-        if self.override:
-            f.write("override=" + str(self.override) + "\n")
-        if self.ephemeral:
-            f.write("ephemeral=" + str(self.ephemeral) + "\n")
-        if self.clobber:
-            f.write("clobber=" + str(self.clobber) + "\n")
+        try:
+            # Create a temp sumo.conf for comparison
+            f = open(path + ".tmp", 'w+')
+            # Write each conf value to file
+            if self.name:
+                f.write("name=" + self.name + "\n")
+            if self.email:
+                f.write("email=" + self.email + "\n")
+            if self.password:
+                f.write("password=" + self.password + "\n")
+            if self.accessid:
+                f.write("accessid=" + self.accessid + "\n")
+            if self.accesskey:
+                f.write("accesskey=" + self.accesskey + "\n")
+            if self.sources:
+                f.write("sources=" + self.sources + "\n")
+            if self.syncSources:
+                f.write("syncSources=" + self.syncSources + "\n")
+            if self.override:
+                f.write("override=" + str(self.override) + "\n")
+            if self.ephemeral:
+                f.write("ephemeral=" + str(self.ephemeral) + "\n")
+            if self.clobber:
+                f.write("clobber=" + str(self.clobber) + "\n")
+
+            f.close()
+
+            # Compare files
+            if ((hashlib.md5(open(path + ".tmp", 'rb').read()).hexdigest()) != (hashlib.md5(open(path, 'rb').read()).hexdigest())):
+                shutil.copy(path + ".tmp", path)
+                self.changed = True
+        finally:
+            os.remove(path + ".tmp")
         
 
 class WindowsSumo(Sumo):
@@ -121,10 +132,7 @@ class LinuxSumo(Sumo):
             return False
 
     def install(self):
-        if self.is_installed():
-            # nothing to do
-            self.changed = False
-        else:
+        if not self.is_installed():
             # do the install
             if platform.machine() == 'i386': # 32-bit
                 rc, out, err = self.module.run_command("curl https://collectors.sumologic.com/rest/download/linux/32 -o /tmp/sumo-install.sh --connect-timeout 30")
@@ -145,7 +153,6 @@ class LinuxSumo(Sumo):
                 self.module.run_command("rm -f /tmp/sumo-install.sh")
             
             # If clean flag True then delete the created collector so it can be recreated when necessary
-            print self.clean
             if self.clean == True:
                 # Stop the collector
                 self.module.run_command("service collector stop")
@@ -159,8 +166,8 @@ class LinuxSumo(Sumo):
                 # Delete the local creds
                 os.remove("/opt/SumoCollector/config/creds/main.properties")
                 # Delete the collector via the Sumo API
-                print "collector id = " + collectorId
-                self.api_delete_collector(collectorId)
+                #print "collector id = " + collectorId
+                #self.api_delete_collector(collectorId)
                 
 
     def uninstall(self):
@@ -209,9 +216,9 @@ def main():
 
         if sumo.state == 'present':
             result['do_install'] = "yes"
-            sumo.api_delete_collector("100010919")
-            #sumo.set_sumo_conf()
-            #sumo.install()
+            #sumo.api_delete_collector("100010919")
+            sumo.set_sumo_conf()
+            sumo.install()
         elif sumo.state == 'absent':
             sumo.uninstall()
 
