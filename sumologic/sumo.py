@@ -69,7 +69,10 @@ class Sumo(object):
         print data
         
     def sumo_conf(self, path):
-        
+
+	if not os.path.isfile(path):
+            open(path, 'a')
+
         try:
             # Create a temp sumo.conf for comparison
             f = open(path + ".tmp", 'w+')
