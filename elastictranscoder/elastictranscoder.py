@@ -57,10 +57,10 @@ EXAMPLES = '''
     input_bucket: input_bucket.in.s3
     output_bucket: output_bucket.in.s3
     notifications:
-      progress: something1
-      complete: something2
-      warning: something3
-      error: something4
+      progress: arn:aws:sns:us-west-2:0123456789:topic-for-elastictranscoder
+      complete: arn:aws:sns:us-west-2:0123456789:topic-for-elastictranscoder
+      warning: arn:aws:sns:us-west-2:0123456789:topic-for-elastictranscoder
+      error: arn:aws:sns:us-west-2:0123456789:topic-for-elastictranscoder
     role: arn:aws:iam::0123456789:role/elastictranscoder
 
 '''
@@ -78,64 +78,60 @@ except ImportError:
     print "failed=True msg='boto required for this module'"
     sys.exit(1)
 
+def fix_up_notifications_dict(dictionary):
+
+    new_dictionary = {}
+    for key,value in dictionary.iteritems():
+        new_dictionary[key.title()] = value
+    
+    return new_dictionary
+
+def get_et_pipeline(connection, name):
+
+    found_pipeline = None
+
+    pipelines = connection.list_pipelines().get("Pipelines")
+
+    for i in pipelines:
+        if i.get("Name") == name:
+            found_pipeline = i
+            break
+
+    return found_pipeline
 
 def create_et_pipeline(connection, module):
     name = module.params.get('name')
     input_bucket = module.params.get('input_bucket')
     output_bucket = module.params.get('output_bucket')
-    notifications = module.params.get('notifications')
+    notifications = fix_up_notifications_dict(module.params.get('notifications'))
     role = module.params.get('role')
-    
-    connection.
 
-    if volumes:
-        for volume in volumes:
-            if 'device_name' not in volume:
-                module.fail_json(msg='Device name must be set for volume')
-            # Minimum volume size is 1GB. We'll use volume size explicitly set to 0
-            # to be a signal not to create this volume
-            if 'volume_size' not in volume or int(volume['volume_size']) > 0:
-                bdm[volume['device_name']] = create_block_device(module, volume)
-
-    lc = LaunchConfiguration(
-        name=name,
-        image_id=image_id,
-        key_name=key_name,
-        security_groups=security_groups,
-        user_data=user_data,
-        block_device_mappings=[bdm],
-        instance_type=instance_type,
-        kernel_id=kernel_id,
-        spot_price=spot_price,
-        instance_monitoring=instance_monitoring,
-        associate_public_ip_address = assign_public_ip,
-        ramdisk_id=ramdisk_id,
-        instance_profile_name=instance_profile_name,
-        ebs_optimized=ebs_optimized,
-    )
-
-    launch_configs = connection.get_all_launch_configurations(names=[name])
+    pipeline = get_et_pipeline(connection, name)
     changed = False
-    if not launch_configs:
+    if not pipeline:
         try:
-            connection.create_launch_configuration(lc)
-            launch_configs = connection.get_all_launch_configurations(names=[name])
+            connection.create_pipeline(name, input_bucket, output_bucket, role, notifications)
+            pipeline = get_et_pipeline(connection, name)
             changed = True
         except BotoServerError, e:
             module.fail_json(msg=str(e))
-    result = launch_configs[0]
+    result = pipeline
 
-    module.exit_json(changed=changed, name=result.name, created_time=str(result.created_time),
-                     image_id=result.image_id, arn=result.launch_configuration_arn,
-                     security_groups=result.security_groups, instance_type=instance_type)
+    module.exit_json(changed=changed, name=result.get("Name"))
+#, created_time=str(result.created_time),
+                     #image_id=result.image_id, arn=result.launch_configuration_arn,
+                     #security_groups=result.security_groups, instance_type=instance_type)
 
 
 def delete_et_pipeline(connection, module):
     name = module.params.get('name')
-    launch_configs = connection.get_all_launch_configurations(names=[name])
-    if launch_configs:
-        launch_configs[0].delete()
-        module.exit_json(changed=True)
+    pipeline = get_et_pipeline(connection, name)
+    if pipeline:
+        try:
+            connection.delete_pipeline(pipeline.get("Id"))
+            module.exit_json(changed=True)
+        except BotoServerError, e:
+            module.fail_json(msg=str(e))
     else:
         module.exit_json(changed=False)
 
@@ -158,7 +154,7 @@ def main():
     region, ec2_url, aws_connect_params = get_aws_connection_info(module)
 
     try:
-        connection = connect_to_aws(boto.ec2.elastictranscoder, region, **aws_connect_params)
+        connection = connect_to_aws(boto.elastictranscoder, region, **aws_connect_params)
     except (boto.exception.NoAuthHandlerFound, StandardError), e:
         module.fail_json(msg=str(e))
 
