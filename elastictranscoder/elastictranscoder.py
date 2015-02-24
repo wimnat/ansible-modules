@@ -16,17 +16,12 @@
 
 DOCUMENTATION = """
 ---
-module: ec2_lc
-short_description: Create or delete AWS Autoscaling Launch Configurations
+module: elastictranscoder
+short_description: Create or delete AWS Elastic Transcoder Pipelines
 description:
-  - Can create or delete AwS Autoscaling Configurations
-  - Works with the ec2_asg module to manage Autoscaling Groups
-notes:
-  - "Amazon ASG Autoscaling Launch Configurations are immutable once created, so modifying the configuration
-    after it is changed will not modify the launch configuration on AWS. You must create a new config and assign
-    it to the ASG instead."
-version_added: "1.6"
-author: Gareth Rushgrove
+  - Can create or delete AWS Elastic Transcoder Pipelines
+version_added: "1.8"
+author: Rob White
 options:
   state:
     description:
@@ -35,97 +30,38 @@ options:
     choices: ['present', 'absent']
   name:
     description:
-      - Unique name for configuration
+      - Unique (recommended) name for pipeline
     required: true
-  instance_type:
+  input_bucket:
     description:
-      - instance type to use for the instance
+      - The Amazon S3 bucket in which you saved the media files that you want to transcode
     required: true
-    default: null
-    aliases: []
-  image_id:
+  output_bucket:
     description:
-      - The AMI unique identifier to be used for the group
-    required: false
-  key_name:
+      - The Amazon S3 bucket in which you want Elastic Transcoder to save the transcoded files
+    required: true
+  notifications:
     description:
-      - The SSH key name to be used for access to managed instances
+      - The Amazon Simple Notification Service (Amazon SNS) topic that you want to notify to report job status. You can specify a topic for Progress, Complete, Warning and Error status as a list
     required: false
-  security_groups:
+  role:
     description:
-      - A list of security groups into which instances should be found
+      - The IAM Amazon Resource Name (ARN) for the role that you want Elastic Transcoder to use to create the pipeline
     required: false
-  region:
-    description:
-      - The AWS region to use. If not specified then the value of the EC2_REGION environment variable, if any, is used.
-    required: false
-    aliases: ['aws_region', 'ec2_region']
-  volumes:
-    description:
-      - a list of volume dicts, each containing device name and optionally ephemeral id or snapshot id. Size and type (and number of iops for io device type) must be specified for a new volume or a root volume, and may be passed for a snapshot volume. For any volume, a volume size less than 1 will be interpreted as a request not to create the volume.
-    required: false
-    default: null
-    aliases: []
-  user_data:
-    description:
-      - opaque blob of data which is made available to the ec2 instance
-    required: false
-    default: null
-    aliases: []
-  kernel_id:
-    description:
-      - Kernel id for the EC2 instance
-    required: false
-    default: null
-    aliases: []    
-  spot_price:
-    description:
-      - The spot price you are bidding. Only applies for an autoscaling group with spot instances.
-    required: false
-    default: null
-  instance_monitoring:
-    description:
-      - whether instances in group are launched with detailed monitoring.
-    required: false
-    default: false
-    aliases: []
-  assign_public_ip:
-    description:
-      - Used for Auto Scaling groups that launch instances into an Amazon Virtual Private Cloud. Specifies whether to assign a public IP address to each instance launched in a Amazon VPC.
-    required: false
-    aliases: []
-    version_added: "1.8"
-  ramdisk_id:
-    description:
-      - A RAM disk id for the instances.
-    required: false
-    default: null
-    aliases: []
-    version_added: "1.8"
-  instance_profile_name:
-    description:
-      - The name or the Amazon Resource Name (ARN) of the instance profile associated with the IAM role for the instances.
-    required: false
-    default: null
-    aliases: []
-    version_added: "1.8"
-  ebs_optimized:
-    description:
-      - Specifies whether the instance is optimized for EBS I/O (true) or not (false).
-    required: false
-    default: false
-    aliases: []
-    version_added: "1.8"
 extends_documentation_fragment: aws
 """
 
 EXAMPLES = '''
-- ec2_lc:
-    name: special
-    image_id: ami-XXX
-    key_name: default
-    security_groups: ['group', 'group2' ]
-    instance_type: t1.micro
+- elastictranscoder:
+    name: production
+    input_bucket: input_bucket.in.s3
+    output_bucket: output_bucket.in.s3
+    notifications:
+      progress: something1
+      complete: something2
+      warning: something3
+      error: something4
+    role: arn:aws:iam::0123456789:role/elastictranscoder
 
 '''
 
@@ -136,52 +72,21 @@ from ansible.module_utils.basic import *
 from ansible.module_utils.ec2 import *
 
 try:
-    from boto.ec2.blockdevicemapping import BlockDeviceType, BlockDeviceMapping
-    import boto.ec2.autoscale
-    from boto.ec2.autoscale import LaunchConfiguration
+    import boto.elastictranscoder
     from boto.exception import BotoServerError
 except ImportError:
     print "failed=True msg='boto required for this module'"
     sys.exit(1)
 
 
-def create_block_device(module, volume):
-    # Not aware of a way to determine this programatically
-    # http://aws.amazon.com/about-aws/whats-new/2013/10/09/ebs-provisioned-iops-maximum-iops-gb-ratio-increased-to-30-1/
-    MAX_IOPS_TO_SIZE_RATIO = 30
-    if 'snapshot' not in volume and 'ephemeral' not in volume:
-        if 'volume_size' not in volume:
-            module.fail_json(msg='Size must be specified when creating a new volume or modifying the root volume')
-    if 'snapshot' in volume:
-        if 'device_type' in volume and volume.get('device_type') == 'io1' and 'iops' not in volume:
-            module.fail_json(msg='io1 volumes must have an iops value set')
-    if 'ephemeral' in volume:
-        if 'snapshot' in volume:
-            module.fail_json(msg='Cannot set both ephemeral and snapshot')
-    return BlockDeviceType(snapshot_id=volume.get('snapshot'),
-                           ephemeral_name=volume.get('ephemeral'),
-                           size=volume.get('volume_size'),
-                           volume_type=volume.get('device_type'),
-                           delete_on_termination=volume.get('delete_on_termination', False),
-                           iops=volume.get('iops'))
-
-
-def create_launch_config(connection, module):
+def create_et_pipeline(connection, module):
     name = module.params.get('name')
-    image_id = module.params.get('image_id')
-    key_name = module.params.get('key_name')
-    security_groups = module.params['security_groups']
-    user_data = module.params.get('user_data')
-    volumes = module.params['volumes']
-    instance_type = module.params.get('instance_type')
-    spot_price = module.params.get('spot_price')
-    instance_monitoring = module.params.get('instance_monitoring')
-    assign_public_ip = module.params.get('assign_public_ip')
-    kernel_id = module.params.get('kernel_id')
-    ramdisk_id = module.params.get('ramdisk_id')
-    instance_profile_name = module.params.get('instance_profile_name')
-    ebs_optimized = module.params.get('ebs_optimized')
-    bdm = BlockDeviceMapping()
+    input_bucket = module.params.get('input_bucket')
+    output_bucket = module.params.get('output_bucket')
+    notifications = module.params.get('notifications')
+    role = module.params.get('role')
+    
+    connection.
 
     if volumes:
         for volume in volumes:
@@ -225,7 +130,7 @@ def create_launch_config(connection, module):
                      security_groups=result.security_groups, instance_type=instance_type)
 
 
-def delete_launch_config(connection, module):
+def delete_et_pipeline(connection, module):
     name = module.params.get('name')
     launch_configs = connection.get_all_launch_configurations(names=[name])
     if launch_configs:
@@ -240,21 +145,11 @@ def main():
     argument_spec.update(
         dict(
             name=dict(required=True, type='str'),
-            image_id=dict(type='str'),
-            key_name=dict(type='str'),
-            security_groups=dict(type='list'),
-            user_data=dict(type='str'),
-            kernel_id=dict(type='str'),
-            volumes=dict(type='list'),
-            instance_type=dict(type='str'),
-            state=dict(default='present', choices=['present', 'absent']),
-            spot_price=dict(type='float'),
-            ramdisk_id=dict(type='str'),
-            instance_profile_name=dict(type='str'),
-            ebs_optimized=dict(default=False, type='bool'),
-            associate_public_ip_address=dict(type='bool'),
-            instance_monitoring=dict(default=False, type='bool'),
-            assign_public_ip=dict(type='bool')
+            input_bucket=dict(type='str'),
+            output_bucket=dict(type='str'),
+            notifications=dict(type='dict'),
+            role=dict(type='str'),
+            state=dict(default='present', choices=['present', 'absent'])
         )
     )
 
@@ -263,15 +158,15 @@ def main():
     region, ec2_url, aws_connect_params = get_aws_connection_info(module)
 
     try:
-        connection = connect_to_aws(boto.ec2.autoscale, region, **aws_connect_params)
+        connection = connect_to_aws(boto.ec2.elastictranscoder, region, **aws_connect_params)
     except (boto.exception.NoAuthHandlerFound, StandardError), e:
         module.fail_json(msg=str(e))
 
     state = module.params.get('state')
 
     if state == 'present':
-        create_launch_config(connection, module)
+        create_et_pipeline(connection, module)
     elif state == 'absent':
-        delete_launch_config(connection, module)
+        delete_et_pipeline(connection, module)
 
 main()
