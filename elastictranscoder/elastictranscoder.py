@@ -20,6 +20,11 @@ module: elastictranscoder
 short_description: Create or delete AWS Elastic Transcoder Pipelines
 description:
   - Can create or delete AWS Elastic Transcoder Pipelines
+notes:
+  - "This module assumes pipeline name is unique but this is not enforced by AWS."
+  - "Pipelines require an IAM ARN for the transcoder role, s3 buckets for the input and output of media and optionally 
+    SNS notification topics for event notifications. All these artifacts must be created prior to using this module."
+  - output_bucket can only be used in creation of the pipeline. It can not be updated after creation.
 version_added: "1.8"
 author: Rob White
 options:
@@ -99,6 +104,30 @@ def get_et_pipeline(connection, name):
 
     return found_pipeline
 
+def et_pipeline_equal(pipeline, module):
+    
+    # OutputBucket is not checked as this can not be updated
+    
+    # Create a dict from the pipeline
+    pipeline_dict = {}
+    pipeline_dict['Role'] = pipeline.get("Role")
+    pipeline_dict['Name'] = pipeline.get("Name")
+    pipeline_dict['Notifications'] = pipeline.get("Notifications")
+    pipeline_dict['InputBucket'] = pipeline.get("InputBucket")
+    
+    # Create a dict from the module parameters
+    module_dict = {}
+    module_dict['Role'] = module.params.get('role')
+    module_dict['Name'] = module.params.get('name')
+    module_dict['Notifications'] = fix_up_notifications_dict(module.params.get('notifications'))
+    module_dict['InputBucket'] = module.params.get('input_bucket')
+    
+    if pipeline_dict == module_dict:
+        return True
+    else:
+        return False
+    
+    
 def create_et_pipeline(connection, module):
     name = module.params.get('name')
     input_bucket = module.params.get('input_bucket')
@@ -115,12 +144,17 @@ def create_et_pipeline(connection, module):
             changed = True
         except BotoServerError, e:
             module.fail_json(msg=str(e))
+    else:
+        if not et_pipeline_equal(pipeline, module):
+            try:
+                connection.update_pipeline(pipeline.get("Id"), name, input_bucket, role, notifications)
+                changed = True
+            except BotoServerError, e:
+                module.fail_json(msg=str(e))
+        
     result = pipeline
 
-    module.exit_json(changed=changed, name=result.get("Name"))
-#, created_time=str(result.created_time),
-                     #image_id=result.image_id, arn=result.launch_configuration_arn,
-                     #security_groups=result.security_groups, instance_type=instance_type)
+    module.exit_json(changed=changed, name=result.get("Name"), Id=result.get("Id"))
 
 
 def delete_et_pipeline(connection, module):
@@ -129,7 +163,7 @@ def delete_et_pipeline(connection, module):
     if pipeline:
         try:
             connection.delete_pipeline(pipeline.get("Id"))
-            module.exit_json(changed=True)
+            module.exit_json(changed=True, Id=pipeline.get("Id"))
         except BotoServerError, e:
             module.fail_json(msg=str(e))
     else:
