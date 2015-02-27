@@ -51,4 +51,4 @@
   file: src=/opt/codebase/wimnat/ansible-modules dest=/etc/ansible/library state=link
 
 - name: Create a symlink for the Ansible test-module command
-  file: src=/opt/codebase/ansible/hacking/test-module dest=/usr/bin/test-module
+  file: src=/opt/codebase/ansible/hacking/test-module dest=/usr/bin/test-module state=link
