@@ -1,0 +1,54 @@
+---
+# tasks file for ansible
+
+# Install EPEL repo
+#- name: Add EPEL repo
+#  yum: name=epel-release state=present
+
+- name: Yum install Ansible
+  yum: name={{ item }} state=present
+  with_items:
+    - ansible
+    - sshpass
+    - python-boto
+    - python-netaddr
+    - git
+
+# EC2 inventory configuration
+- name: Create an 'inventory_plugins' directory
+  file: path=/usr/share/ansible_plugins/inventory_plugins state=directory
+
+- name: Fetch ec2 inventory module
+  get_url: url=https://raw.githubusercontent.com/ansible/ansible/devel/plugins/inventory/ec2.py dest=/usr/share/ansible_plugins/inventory_plugins/ec2.py mode=0755
+
+- name: Fetch ec2 inventory module configuration
+  get_url: url=https://raw.githubusercontent.com/ansible/ansible/devel/plugins/inventory/ec2.ini dest=/usr/share/ansible_plugins/inventory_plugins/ec2.ini
+
+- name: Change inventory module config
+  replace: dest=/usr/share/ansible_plugins/inventory_plugins/ec2.ini regexp='^destination_variable = public_dns_name$' replace='destination_variable = private_dns_name' backup=yes
+
+- replace: dest=/usr/share/ansible_plugins/inventory_plugins/ec2.ini regexp='^vpc_destination_variable = ip_address$' replace='vpc_destination_variable = private_ip_address' backup=yes
+
+- replace: dest=/usr/share/ansible_plugins/inventory_plugins/ec2.ini regexp='^all_instances = False$' replace='all_instances = True' backup=yes
+
+#- replace: dest=/usr/share/ansible_plugins/inventory_plugins/ec2.ini regexp='^# instance_filters = tag:env=stage$' replace='instance_filters = tag:Env={{ aws_tag_env }}' backup=yes
+
+# Clone the ansible repo - required for testing modules
+- name: Clone ansible repo
+  git: repo=https://github.com/ansible/ansible.git dest=/opt/codebase/ansible
+
+# Copy boto config
+- name: Copy boto config
+  copy: src=/vagrant/.vagrant_provisioning/roles/ansible/files/boto.cfg dest=/etc/boto.cfg
+
+- name: Create directory for CodeBase
+  file: path=/opt/codebase/wimnat state=directory
+
+- name: Create a symlink to codebase from the Vagrant synced folder
+  file: src=/vagrant dest=/opt/codebase/wimnat/ansible-modules state=link
+
+- name: Create a symlink to ansible-modules
+  file: src=/opt/codebase/wimnat/ansible-modules dest=/etc/ansible/library state=link
+
+- name: Create a symlink for the Ansible test-module command
+  file: src=/opt/codebase/ansible/hacking/test-module dest=/usr/bin/test-module
