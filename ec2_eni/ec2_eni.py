@@ -68,6 +68,14 @@ options:
       - Force detachment of the interface. This applies either when explicitly detaching the interface by setting instance_id to None or when deleting an interface with state=absent
     required: false
     default: no
+  delete_on_termination:
+    description:
+      - Delete the interface when the instance it is attached to is terminated. You can only specify this flag when the interface is being modified, not on creation.
+    required: false
+  source_dest_check:
+    description:
+      - By default, interfaces perform source/destination checks. NAT instances however need this check to be disabled. You can only specify this flag when the interface is being modified, not on creation.
+    required: false  
 extends_documentation_fragment: aws
 requirements: [ "boto" ]
 '''
@@ -108,6 +116,22 @@ EXAMPLES = '''
 # List all ENIs
 - ec2_eni:
     state: list
+    
+### Delete an interface on termination
+# First create the interface
+- ec2_eni:
+    instance_id: i-xxxxxxx
+    device_index: 1
+    private_ip_address: 172.31.0.20
+    subnet_id: subnet-xxxxxxxx
+    state: present
+  register: eni
+  
+# Modify the interface to enable the delete_on_terminaton flag
+- ec2_eni:
+    eni_id: {{ "eni.interface.id" }}
+    delete_on_termination: true
+    
 
 
 '''
@@ -123,14 +147,15 @@ from ansible.module_utils.ec2 import *
 try:
     import boto.ec2
     from boto.exception import BotoServerError
+    HAS_BOTO = True
 except ImportError:
-    print "failed=True msg='boto required for this module'"
-    sys.exit(1)
+    HAS_BOTO = False
+
 
 def get_error_message(xml_string):
     
     root = ET.fromstring(xml_string)
-    for message in root.iter('Message'):            
+    for message in root.findall('.//Message'):            
         return message.text
     
     
@@ -174,7 +199,7 @@ def create_eni(connection, module):
     
     try:
         eni = compare_eni(connection, module)
-        if eni is None:            
+        if eni is None:
             eni = connection.create_network_interface(subnet_id, private_ip_address, description, security_groups)
             if instance_id is not None:
                 try:
@@ -205,32 +230,44 @@ def modify_eni(connection, module):
     description = module.params.get('description')
     security_groups = module.params.get('security_groups')
     force_detach = module.params.get("force_detach")
+    source_dest_check = module.params.get("source_dest_check")
+    delete_on_termination = module.params.get("delete_on_termination")
     changed = False
+
     
     try:
-        eni = compare_eni(connection, module)
-        if eni is None:
-            # Get the eni_id specified
-            eni_result_set = connection.get_all_network_interfaces(eni_id)
-            eni = eni_result_set[0]
-            if description is not None:
-                if eni.description != description:
-                    connection.modify_network_interface_attribute(eni.id, "description", description)
-                    changed = True
-            if security_groups is not None:
-                if sorted(get_sec_group_list(eni.groups)) != sorted(security_groups):
-                    connection.modify_network_interface_attribute(eni.id, "groupSet", security_groups)
-                    changed = True
+        # Get the eni with the eni_id specified
+        eni_result_set = connection.get_all_network_interfaces(eni_id)
+        eni = eni_result_set[0]
+        if description is not None:
+            if eni.description != description:
+                connection.modify_network_interface_attribute(eni.id, "description", description)
+                changed = True
+        if security_groups is not None:
+            if sorted(get_sec_group_list(eni.groups)) != sorted(security_groups):
+                connection.modify_network_interface_attribute(eni.id, "groupSet", security_groups)
+                changed = True
+        if source_dest_check is not None:
+            if eni.source_dest_check != source_dest_check:
+                connection.modify_network_interface_attribute(eni.id, "sourceDestCheck", source_dest_check)
+                changed = True
+        if delete_on_termination is not None:
             if eni.attachment is not None:
-                if eni.attachment.instance_id != instance_id or eni.attachment.device_index != device_index:
-                    eni.detach(force_detach)
-                    if instance_id is not None:
-                        eni.attach(instance_id, device_index)
+                if eni.attachment.delete_on_termination is not delete_on_termination:
+                    connection.modify_network_interface_attribute(eni.id, "deleteOnTermination", delete_on_termination, eni.attachment.id)
                     changed = True
             else:
+                module.fail_json(msg="Can not modify delete_on_termination as the interface is not attached")
+        if eni.attachment is not None and instance_id is not "":
+            if eni.attachment.instance_id != instance_id or eni.attachment.device_index != device_index:
+                eni.detach(force_detach)
                 if instance_id is not None:
                     eni.attach(instance_id, device_index)
-                    changed = True
+                changed = True
+        else:
+            if instance_id is not None and instance_id is not "":
+                eni.attach(instance_id, device_index)
+                changed = True
 
     except BotoServerError as e:
         module.fail_json(msg=get_error_message(e.args[2]))
@@ -292,12 +329,11 @@ def compare_eni(connection, module):
     
     try:
         all_eni = connection.get_all_network_interfaces(eni_id)
-        eni = all_eni[0]
-        
-        remote_security_groups = get_sec_group_list(eni.groups)
-                
-        if (eni.subnet_id == subnet_id) and (eni.private_ip_address == private_ip_address) and (eni.description == description) and (remote_security_groups == security_groups): 
-            return eni
+
+        for eni in all_eni:
+            remote_security_groups = get_sec_group_list(eni.groups)
+            if (eni.subnet_id == subnet_id) and (eni.private_ip_address == private_ip_address) and (eni.description == description) and (remote_security_groups == security_groups): 
+                return eni
     
     except BotoServerError as e:
         module.fail_json(msg=get_error_message(e.args[2]))
@@ -319,18 +355,23 @@ def main():
     argument_spec.update(
         dict(
             eni_id = dict(default=None),
-            instance_id = dict(),
+            instance_id = dict(default=""),
             private_ip_address = dict(),
             subnet_id = dict(),
             description = dict(),
             security_groups = dict(type='list'),           
             device_index = dict(default=0, type='int'),
             state=dict(default='present', choices=['present', 'absent', 'list']),
-            force_detach=dict(default='no', type='bool')
+            force_detach=dict(default='no', type='bool'),
+            source_dest_check=dict(default=None, type='bool'),
+            delete_on_termination=dict(default=None, type='bool')
         )
     )
     
     module = AnsibleModule(argument_spec=argument_spec)
+
+    if not HAS_BOTO:
+        module.fail_json(msg='boto required for this module')
     
     region, ec2_url, aws_connect_params = get_aws_connection_info(module)
     
