@@ -13,6 +13,81 @@
 # You should have received a copy of the GNU General Public License
 # along with this library.  If not, see <http://www.gnu.org/licenses/>.
 
+DOCUMENTATION = '''
+---
+module: s3_website
+short_description: Configure an s3 bucket as a website
+description:
+    - Configure an s3 bucket as a website, including redirect rules
+version_added: "1.9"
+author: Rob White
+options:
+  bucket:
+    description:
+      - s3 bucket name
+    required: true
+    default: null 
+    aliases: []
+  error_key:
+    description:
+      - The object key name to use when a 4XX class error occurs. To remove an error key, set to None.
+    required: false
+    default: null
+    aliases: []
+  redirect_all_requests:
+    description:
+      - Describes the redirect behavior for every request to this s3 bucket website endpoint 
+    required: false
+    default: null
+    aliases: []
+  routing_rules:
+    description:
+      - A dictionary of dictionaries that specifies conditions and redirects that apply when conditions are met. See examples for routing_rules values
+    required: false
+    default: null
+    aliases: []
+  state:
+    description:
+      - Create or delete ENI
+    required: false
+    default: present
+  suffix:
+    description:
+      - Suffix that is appended to a request that is for a directory on the website endpoint (e.g. if the suffix is index.html and you make a request to samplebucket/images/ the data that is returned will be for the object with the key name images/index.html). The suffix must not be empty and must not include a slash character.
+    required: false
+    default: null
+    aliases: []
+extends_documentation_fragment: aws
+requirements: [ "boto" ]
+
+'''
+
+EXAMPLES = '''
+# Configure an s3 bucket to redirect all requests to example.com
+- s3_website:
+    bucket: mybucket.com
+    redirect_all_requests: example.com
+    state: present
+
+# Remove website configuration from an s3 bucket
+- s3_website:
+    bucket: mybucket.com
+    state: absent
+    
+# Configure an s3 bucket as a website with index and error pages and a routing rule set
+- s3_website:
+    bucket: mybucket.com
+    suffix: index.htm
+    error_key: errors/404.htm
+    routing_rules:
+      docs/:
+        replace_key_prefix: documents/
+      blog/:
+        hostname: blogspace.com
+    state: present
+    
+'''
+
 import xml.etree.ElementTree as ET
 
 from ansible.module_utils.basic import *
@@ -70,8 +145,11 @@ def enable_bucket_as_website(connection, module):
     bucket_name = module.params.get("bucket")
     suffix = module.params.get("suffix")
     error_key = module.params.get("error_key")
+    if error_key == "None":
+        error_key = None
     routing_rules = module.params.get("routing_rules")
     redirect_all_requests = module.params.get("redirect_all_requests")
+    changed = False
     
     if redirect_all_requests is not None:
         redirect_location = RedirectLocation(hostname=redirect_all_requests)
@@ -85,13 +163,15 @@ def enable_bucket_as_website(connection, module):
     
     try:
         bucket = connection.get_bucket(bucket_name)
-        bucket.configure_website(suffix, error_key, redirect_location, routing_rules_object)
-        changed = True
+        if compare_bucket_as_website(bucket, module) is False:
+            bucket.delete_website_configuration()
+            bucket.configure_website(suffix, error_key, redirect_location, routing_rules_object)
+            changed = True
     except BotoServerError as e:
         module.fail_json(msg=get_error_message(e.args[2]))
     
-    website_config = bucket.get_website_configuration()
-    module.exit_json(changed=changed, config=website_config, here="yes")
+    website_config = get_website_conf_plus(bucket)
+    module.exit_json(changed=changed, config=website_config)
     
 def disable_bucket_as_website(connection, module):
     
@@ -111,25 +191,88 @@ def disable_bucket_as_website(connection, module):
     
     module.exit_json(changed=changed, config={})
     
+def compare_bucket_as_website(bucket, module):
+    
+    suffix = module.params.get("suffix")
+    error_key = module.params.get("error_key")
+    routing_rules = module.params.get("routing_rules")
+    redirect_all_requests = module.params.get("redirect_all_requests")
+
+    try:
+        website_config = bucket.get_website_configuration()
+        bucket_equal = False
+        
+        #print "error key *******"
+        #print website_config
+        
+        try:
+            if suffix == website_config.IndexDocument.Suffix or suffix is None:
+                bucket_equal = True
+            else:
+                bucket_equal = False
+        except AttributeError:
+            if suffix is None:
+                bucket_equal = True
+            else:
+                bucket_equal = False
+                
+        try:
+            if error_key == website_config.ErrorDocument.Key or error_key is None:
+                bucket_equal = True
+            else:
+                bucket_equal = False
+                # Check if error_key is blank. If it is, change it to none so a configure_website call will succeed
+                if error_key == "":
+                    module.params['error_key'] = None
+        except AttributeError:
+            if error_key is None:
+                bucket_equal = True
+            else:
+                bucket_equal = False
+        
+        # Only check if redirect_all_requests is not None
+        if redirect_all_requests is not None:
+            try:
+                if redirect_all_requests == website_config.RedirectAllRequestsTo.HostName:
+                    bucket_equal = True
+                else:
+                    bucket_equal = False
+            except AttributeError:
+                bucket_equal = False
+        
+    except BotoServerError as e:
+        msg = get_error_message(e.args[2])
+        if msg == "The specified bucket does not have a website configuration":
+            bucket_equal = False
+     
+    return bucket_equal
+
+def get_website_conf_plus(bucket):
+    
+    website_config = bucket.get_website_configuration()
+    website_config['EndPoint'] = bucket.get_website_endpoint()
+    return website_config
+            
+    
 def main():
     argument_spec = ec2_argument_spec()
     argument_spec.update(
         dict(
             bucket = dict(required=True),
             state = dict(default='present', choices=['present', 'absent']),
-            suffix = dict(default='index.htm'),
+            suffix = dict(),
             error_key = dict(),
             routing_rules = dict(type='dict'),
             redirect_all_requests = dict()
-        ),
-        #mutually_exclusive = [ 
-        #                       ['redirect_all_requests', 'suffix'],
-        #                       ['redirect_all_requests', 'error_key'],
-        #                       ['redirect_all_requests', 'routing_rules']
-        #                     ]
+        )
     )
     
-    module = AnsibleModule(argument_spec=argument_spec)
+    module = AnsibleModule(argument_spec=argument_spec,
+        mutually_exclusive = [
+                               ['redirect_all_requests', 'suffix'],
+                               ['redirect_all_requests', 'error_key'],
+                               ['redirect_all_requests', 'routing_rules']
+                             ])
 
     if not HAS_BOTO:
         module.fail_json(msg='boto required for this module')
@@ -139,7 +282,6 @@ def main():
     if region:
         try:
             connection = connect_to_aws(boto.s3, region, **aws_connect_params)
-            #s3 = boto.s3.connect_to_region(region, is_secure=True, calling_format=OrdinaryCallingFormat(), **aws_connect_params)
         except (boto.exception.NoAuthHandlerFound, StandardError), e:
             module.fail_json(msg=str(e))
     else:
