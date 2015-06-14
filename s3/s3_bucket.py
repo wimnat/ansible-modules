@@ -12,7 +12,6 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this library.  If not, see <http://www.gnu.org/licenses/>.
-from boto.exception import S3CreateError, S3ResponseError
 
 DOCUMENTATION = '''
 ---
@@ -79,6 +78,7 @@ try:
     from boto.s3.website import RoutingRules
     from boto.s3.website import RoutingRule
     from boto.exception import BotoServerError
+    from boto.exception import S3CreateError, S3ResponseError
     HAS_BOTO = True
 except ImportError:
     HAS_BOTO = False
