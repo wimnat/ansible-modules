@@ -18,37 +18,33 @@ DOCUMENTATION = '''
 module: s3_website
 short_description: Configure an s3 bucket as a website
 description:
-    - Configure an s3 bucket as a website, including redirect rules
-version_added: "1.9"
-author: Rob White
+    - Configure an s3 bucket as a website
+version_added: "2.0"
+author: Rob White, wimnat [at] gmail.com, @wimnat
 options:
   bucket:
     description:
       - s3 bucket name
     required: true
     default: null 
-    aliases: []
   error_key:
     description:
       - The object key name to use when a 4XX class error occurs. To remove an error key, set to None.
     required: false
     default: null
-    aliases: []
   redirect_all_requests:
     description:
       - Describes the redirect behavior for every request to this s3 bucket website endpoint 
     required: false
     default: null
-    aliases: []
   routing_rules:
     description:
       - A dictionary of dictionaries that specifies conditions and redirects that apply when conditions are met. See examples for routing_rules values
     required: false
     default: null
-    aliases: []
   state:
     description:
-      - Create or delete ENI
+      - Add or remove s3 website configuration
     required: false
     default: present
   suffix:
@@ -56,10 +52,8 @@ options:
       - Suffix that is appended to a request that is for a directory on the website endpoint (e.g. if the suffix is index.html and you make a request to samplebucket/images/ the data that is returned will be for the object with the key name images/index.html). The suffix must not be empty and must not include a slash character.
     required: false
     default: null
-    aliases: []
+    
 extends_documentation_fragment: aws
-requirements: [ "boto" ]
-
 '''
 
 EXAMPLES = '''
@@ -90,9 +84,6 @@ EXAMPLES = '''
 
 import xml.etree.ElementTree as ET
 
-from ansible.module_utils.basic import *
-from ansible.module_utils.ec2 import *
-
 try:
     import boto.ec2
     from boto.s3.connection import OrdinaryCallingFormat
@@ -121,7 +112,7 @@ def make_routing_rules_object(routing_rules):
         if "protocol" in value:
             protocol = value.get("protocol")
         else:
-            hostname = None
+            protocol = None
         if "replace_key" in value:
             replace_key = value.get("replace_key")
         else:
@@ -134,8 +125,7 @@ def make_routing_rules_object(routing_rules):
             http_redirect_code = value.get("http_redirect_code")
         else:
             http_redirect_code = None
-        
-        print     
+           
         routing_rules_list.append(RoutingRule.when(key_prefix=key).then_redirect(hostname, protocol, replace_key, replace_key_prefix, http_redirect_code))
     
     return RoutingRules(routing_rules_list)
@@ -239,6 +229,9 @@ def compare_bucket_as_website(bucket, module):
                     bucket_equal = False
             except AttributeError:
                 bucket_equal = False
+        #else:
+        #    if hasattr(website_config, 'RedirectAllRequestsTo.HostName') is False:
+        #        bucket_equal = False
         
     except BotoServerError as e:
         msg = get_error_message(e.args[2])
@@ -294,6 +287,10 @@ def main():
     elif state == 'absent':
         disable_bucket_as_website(connection, module)
         
+
+
+from ansible.module_utils.basic import *
+from ansible.module_utils.ec2 import *
 
 # this is magic, see lib/ansible/module_common.py
 #<<INCLUDE_ANSIBLE_MODULE_COMMON>>

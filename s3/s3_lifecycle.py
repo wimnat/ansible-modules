@@ -69,6 +69,41 @@ options:
 extends_documentation_fragment: aws
 '''
 
+EXAMPLES = '''
+# Note: These examples do not set authentication details, see the AWS Guide for details.
+
+# Configure a lifecycle rule on a bucket to expire (delete) items with a prefix of /logs/ after 30 days
+- s3_lifecycle:
+    name: mybucket
+    expiration: 30
+    prefix: /logs/
+    status: enabled
+    state: present
+    
+# Configure a lifecycle rule to transition all items with a prefix of /logs/ to glacier after 7 days and then delete after 90 days
+- s3_lifecycle:
+    name: mybucket
+    transition: 7
+    expiration: 90
+    prefix: /logs/
+    status: enabled
+    state: present
+    
+# Disable the rule created above
+- s3_lifecycle:
+    name: mybucket
+    prefix: /logs/
+    status: disabled
+    state: present
+    
+# Delete the lifecycle rule created above
+- s3_lifecycle:
+    name: mybucket
+    prefix: /logs/
+    state: absent
+    
+'''
+
 import xml.etree.ElementTree as ET
 
 try:
