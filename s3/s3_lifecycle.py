@@ -54,12 +54,17 @@ options:
     required: false
     default: enabled
     choices: [ 'enabled', 'disabled' ]
-  transition:
+  storage_class:
     description:
       - The storage class to transition to. Currently there is only one valid value - 'glacier'.
     required: false
     default: glacier
     choices: [ 'glacier' ]
+  transition:
+    description:
+      - Indicates when, in days, an object transitions to a different storage class.
+    required: false
+    default: null
 
 extends_documentation_fragment: aws
 '''
@@ -69,12 +74,51 @@ import xml.etree.ElementTree as ET
 try:
     import boto.ec2
     from boto.s3.connection import OrdinaryCallingFormat
-    from boto.s3.lifecycle import Lifecycle, Transition, Rule
+    from boto.s3.lifecycle import Lifecycle, Expiration, Transition, Rule
     from boto.exception import BotoServerError
     from boto.exception import S3CreateError, S3ResponseError
     HAS_BOTO = True
 except ImportError:
     HAS_BOTO = False
+    
+class CommonEqualityMixin(object):
+    
+    def __eq__(self, other):
+        return (isinstance(other, self.__class__)
+            and self.__dict__ == other.__dict__)
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+class Rule(Rule):
+
+    def __eq__(self, other):
+        
+        return self.__dict__ == other.__dict__
+        #return self.status == other.status
+        #return (isinstance(other, self.__class__)
+        #    and self.__dict__ == other.__dict__)
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+    
+class Expiration(Expiration):
+
+    def __eq__(self, other):
+        return self.__dict__ == other.__dict__
+        #return (isinstance(other, self.__class__)
+        #    and self.__dict__ == other.__dict__)
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+    
+class Transition(Transition):
+
+    def __eq__(self, other):
+        return self.__dict__ == other.__dict__
+
+    def __ne__(self, other):
+        return not self.__eq__(other)        
 
 def get_error_message(xml_string):
 
@@ -96,6 +140,7 @@ def create_lifecycle_rule(connection, module):
     prefix = module.params.get("prefix")
     rule_id = module.params.get("rule_id")
     status = module.params.get("status")
+    storage_class = module.params.get("storage_class")
     transition = module.params.get("transition")
     changed = False
 
@@ -104,10 +149,122 @@ def create_lifecycle_rule(connection, module):
     except S3ResponseError, e:
         module.fail_json(msg=str(get_error_message(e.args[2])))
 
-    # Create transition and rule
-    transition_obj = Transition(days=expiration, storage_class=transition.upper())
-    rule = Rule(rule_id, prefix, status, transition=transition_obj)
+    # Get the bucket's current lifecycle rules
+    try:
+        current_lifecycle_obj = bucket.get_lifecycle_config()
+    except S3ResponseError, e:
+        error_code = get_error_code(e.args[2])
+        if error_code == "NoSuchLifecycleConfiguration":
+            current_lifecycle_obj = Lifecycle()
+        else:
+            module.fail_json(debug=x, msg=str(get_error_message(e.args[2])))
 
+    # Create expiration
+    if expiration is not None:
+        expiration_obj = Expiration(days=expiration)
+    else:
+        expiration_obj = None
+    
+    # Create transition
+    if transition is not None:
+        transition_obj = Transition(days=transition, storage_class=storage_class.upper())
+    else:
+        transition_obj = None
+    
+    # Create rule
+    rule = Rule(rule_id, prefix, status.title(), expiration_obj, transition_obj)
+    
+    # Create lifecycle
+    lifecycle_obj = Lifecycle()
+    
+    # Check if rule exists
+    # If an ID exists, use that otherwise compare based on prefix
+    if rule.id is not None:
+        for existing_rule in current_lifecycle_obj:
+            if rule.id != existing_rule.id:
+                lifecycle_obj.append(existing_rule)
+            else:
+                lifecycle_obj.append(rule)
+    else:
+        appended = False
+        for existing_rule in current_lifecycle_obj:
+            # Drop the rule ID and Rule object for comparison purposes
+            existing_rule.id = None
+            del existing_rule.Rule
+            
+            if rule.prefix == existing_rule.prefix:
+                if rule == existing_rule:
+                    lifecycle_obj.append(rule)
+                    appended = True
+                else:
+                    lifecycle_obj.append(rule)
+                    changed = True
+                    appended = True
+            else:
+                lifecycle_obj.append(existing_rule)
+    
+    if not appended:
+        lifecycle_obj.append(rule)
+        changed = True
+        
+    # Write lifecycle to bucket
+    try:
+        bucket.configure_lifecycle(lifecycle_obj)
+    except BotoServerError, e:
+        module.fail_json(msg=str(get_error_message(e.args[2])))
+        
+    module.exit_json(changed=changed)
+    
+def destroy_lifecycle_rule(connection, module):
+
+    name = module.params.get("name")
+    prefix = module.params.get("prefix")
+    rule_id = module.params.get("rule_id")
+    changed = False
+
+    try:
+        bucket = connection.get_bucket(name)
+    except S3ResponseError, e:
+        module.fail_json(msg=str(get_error_message(e.args[2])))
+
+    # Get the bucket's current lifecycle rules
+    try:
+        current_lifecycle_obj = bucket.get_lifecycle_config()
+    except S3ResponseError, e:
+        module.fail_json(msg=str(get_error_message(e.args[2])))
+        
+    # Create lifecycle
+    lifecycle_obj = Lifecycle()
+    
+    # Check if rule exists
+    # If an ID exists, use that otherwise compare based on prefix
+    if rule_id is not None:
+        for existing_rule in current_lifecycle_obj:
+            if rule_id == existing_rule.id:
+                # We're not keeping the rule (i.e. deleting) so mark as changed
+                changed = True
+            else:
+                lifecycle_obj.append(existing_rule)
+    else:
+        for existing_rule in current_lifecycle_obj:
+            if prefix == existing_rule.prefix:
+                # We're not keeping the rule (i.e. deleting) so mark as changed
+                changed = True
+            else:
+                lifecycle_obj.append(existing_rule)
+                
+    
+    # Write lifecycle to bucket or, if there no rules left, delete lifecycle configuration
+    try:
+        if lifecycle_obj:
+            bucket.configure_lifecycle(lifecycle_obj)
+        else:
+            bucket.delete_lifecycle_configuration()
+    except BotoServerError, e:
+        module.fail_json(msg=str(get_error_message(e.args[2])))
+        
+    module.exit_json(changed=changed)
+    
 
 def main():
 
@@ -115,14 +272,14 @@ def main():
     argument_spec.update(
         dict(
             name = dict(required=True),
-            expiration = dict(required=True),
+            expiration = dict(default=None, required=False, type='int'),
             prefix = dict(default=None, required=False),
             requester_pays = dict(default='no', type='bool'),
             rule_id = dict(required=False),
             state = dict(default='present', choices=['present', 'absent']),
             status = dict(default='enabled', choices=['enabled', 'disabled']),
-            transition = dict(default='glacier', choices=['glacier']),
-            versioning = dict(default='no', type='bool')
+            storage_class = dict(default='glacier', choices=['glacier']),
+            transition = dict(default=None, required=False, type='int')
         )
     )
 
