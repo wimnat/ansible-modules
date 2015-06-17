@@ -20,8 +20,14 @@ short_description: Manage s3 buckets in AWS
 description:
     - Manage s3 buckets in AWS
 version_added: "2.0"
-author: Rob White, wimnat [at] gmail.com, @wimnat
+author: Rob White (@wimnat)
 options:
+  force:
+    description: 
+      - When trying to delete a bucket, delete all keys in the bucket first (an s3 bucket must be empty for a successful deletion)
+    required: false
+    default: no
+    choices: [ 'yes', 'no' ]
   policy:
     description:
       - The JSON policy as a string.
@@ -227,12 +233,21 @@ def destroy_bucket(connection, module):
     name = module.params.get("name")
     changed = False
     
+    if force:
+        try:
+            # Empty the bucket
+            for key in bucket.list():
+                key.delete()
+                
+        except BotoServerError, e:
+            module.fail_json(msg=str(get_error_message(e.args[2])))
+    
     try:
         bucket = connection.delete_bucket(name)
         changed = True
         print bucket
     except Exception, e:
-        module.fail_json(msg=str(e))
+        module.fail_json(msg=str(get_error_message(e.args[2])))
         
     
     
@@ -241,6 +256,7 @@ def main():
     argument_spec = ec2_argument_spec()
     argument_spec.update(
         dict(
+            force = dict(required=False, default='no', type='bool'),
             policy = dict(required=False, default=None),
             name = dict(required=True),
             requester_pays = dict(default='no', type='bool'),

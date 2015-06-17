@@ -20,7 +20,7 @@ short_description: Configure an s3 bucket website redirect rule
 description:
     - Configure an s3 bucket website redirect rule
 version_added: "2.0"
-author: Rob White, wimnat [at] gmail.com, @wimnat
+author: Rob White (@wimnat)
 options:
   name:
     description:
@@ -110,11 +110,13 @@ def get_error_code(xml_string):
         return message.text
 
 
-def get_website_redirect_conf_plus(bucket):
-    
+def get_website_redirect_conf(bucket):
+
     website_config = bucket.get_website_configuration()
-    website_redirect_config = website_config.WebsiteConfiguration.RoutingRules
-    return website_redirect_config
+    try:
+        return website_config.WebsiteConfiguration.RoutingRules
+    except AttributeError:
+        return {}
             
 def create_redirect_rule(connection, module):
     
@@ -173,9 +175,55 @@ def create_redirect_rule(connection, module):
     except BotoServerError, e:
         module.fail_json(msg=str(get_error_message(e.args[2])))
         
-    module.exit_json(changed=changed, config=get_website_redirect_conf_plus(bucket))
+    module.exit_json(changed=changed, config=get_website_redirect_conf(bucket))
         
+def destroy_redirect_rule(connection, module):
     
+    name = module.params.get("name")
+    key_prefix = module.params.get("key_prefix")
+    http_error_code = module.params.get("http_error_code")
+    protocol = module.params.get("protocol")
+    hostname = module.params.get("hostname")
+    replace_key_prefix_with = module.params.get("replace_key_prefix_with")
+    replace_key_with = module.params.get("replace_key_with")
+    http_redirect_code = module.params.get("http_redirect_code")
+    changed = False
+    
+    # Check bucket exists
+    try:
+        bucket = connection.get_bucket(name)
+    except S3ResponseError, e:
+        module.fail_json(msg=str(get_error_message(e.args[2])))
+        
+    # Check bucket is configured as website
+    try:
+        website_config = bucket.get_website_configuration_obj()
+    except S3ResponseError, e:
+        module.fail_json(msg=str(get_error_message(e.args[2])))
+        
+    current_redirect_rules = website_config.routing_rules
+    
+    # Create routing rules object
+    routing_rules_obj = RoutingRules()
+    
+    # Create redirect rule
+    rule = RoutingRule.when(key_prefix=key_prefix, http_error_code=http_error_code).then_redirect(hostname, protocol, replace_key_with, replace_key_prefix_with, http_redirect_code)
+
+    for existing_rule in current_redirect_rules:
+        # Match based on http_error_code and prefix
+        if rule.condition.http_error_code == existing_rule.condition.http_error_code and rule.condition.key_prefix == existing_rule.condition.key_prefix:
+            # don't append the rule
+            changed = True
+        else:
+            routing_rules_obj.add_rule(existing_rule)
+            
+    try:
+        bucket.configure_website(website_config.suffix, website_config.error_key, website_config.redirect_all_requests_to, routing_rules_obj)
+    except BotoServerError, e:
+        module.fail_json(msg=str(get_error_message(e.args[2])))
+        
+    module.exit_json(changed=changed, config=get_website_redirect_conf(bucket))
+        
     
 def main():
     argument_spec = ec2_argument_spec()
