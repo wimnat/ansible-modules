@@ -66,6 +66,7 @@ options:
       - Add or remove s3 website redirect rule
     required: false
     default: present
+    choices: [ 'present', 'absent' ]
     
 extends_documentation_fragment: aws
 '''
