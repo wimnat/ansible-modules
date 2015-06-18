@@ -20,14 +20,24 @@ short_description: Manage s3 bucket lifecycle rules in AWS
 description:
     - Manage s3 bucket lifecycle rules in AWS
 version_added: "2.0"
-author: Rob White, wimnat [at] gmail.com, @wimnat
+author: Rob White (@wimnat)
+notes:
+  - If specifying expiration time as days then transition time must also be specified in days
+  - If specifying expiration time as a date then transition time must also be specified as a date
+requirements:
+  - python-dateutil
 options:
   name:
     description:
       - Name of the s3 bucket
     required: true
     default: null
-  expiration:
+  expiration_date:
+    description:
+      - Indicates the lifetime of the objects that are subject to the rule by the date they will expire. The value must be ISO-8601 format and the time must be midnight GST.
+    required: true
+    default: null  
+  expiration_days:
     description:
       - Indicates the lifetime, in days, of the objects that are subject to the rule. The value must be a non-zero positive integer.
     required: true
@@ -60,7 +70,12 @@ options:
     required: false
     default: glacier
     choices: [ 'glacier' ]
-  transition:
+  transition_date:
+    description:
+      - Indicates the lifetime of the objects that are subject to the rule by the date they will transition to a different storage class. The value must be ISO-8601 format and the time must be midnight GST.
+    required: true
+    default: null
+  transition_days:
     description:
       - Indicates when, in days, an object transitions to a different storage class.
     required: false
@@ -105,6 +120,7 @@ EXAMPLES = '''
 '''
 
 import xml.etree.ElementTree as ET
+import dateutil.parser
 
 try:
     import boto.ec2
@@ -171,12 +187,14 @@ def get_error_code(xml_string):
 def create_lifecycle_rule(connection, module):
 
     name = module.params.get("name")
-    expiration = module.params.get("expiration")
+    expiration_date = module.params.get("expiration_date")
+    expiration_days = module.params.get("expiration_days")
     prefix = module.params.get("prefix")
     rule_id = module.params.get("rule_id")
     status = module.params.get("status")
     storage_class = module.params.get("storage_class")
-    transition = module.params.get("transition")
+    transition_date = module.params.get("transition_date")
+    transition_days = module.params.get("transition_days")
     changed = False
 
     try:
@@ -195,14 +213,18 @@ def create_lifecycle_rule(connection, module):
             module.fail_json(debug=x, msg=str(get_error_message(e.args[2])))
 
     # Create expiration
-    if expiration is not None:
-        expiration_obj = Expiration(days=expiration)
+    if expiration_days is not None:
+        expiration_obj = Expiration(days=expiration_days)
+    elif expiration_date is not None:
+        expiration_obj = Expiration(date=expiration_date)
     else:
         expiration_obj = None
     
     # Create transition
-    if transition is not None:
-        transition_obj = Transition(days=transition, storage_class=storage_class.upper())
+    if transition_days is not None:
+        transition_obj = Transition(days=transition_days, storage_class=storage_class.upper())
+    elif transition_date is not None:
+        transition_obj = Transition(date=transition_date, storage_class=storage_class.upper())
     else:
         transition_obj = None
     
@@ -307,18 +329,27 @@ def main():
     argument_spec.update(
         dict(
             name = dict(required=True),
-            expiration = dict(default=None, required=False, type='int'),
+            expiration_days = dict(default=None, required=False, type='int'),
+            expiration_date = dict(default=None, required=False, type='str'),
             prefix = dict(default=None, required=False),
             requester_pays = dict(default='no', type='bool'),
             rule_id = dict(required=False),
             state = dict(default='present', choices=['present', 'absent']),
             status = dict(default='enabled', choices=['enabled', 'disabled']),
             storage_class = dict(default='glacier', choices=['glacier']),
-            transition = dict(default=None, required=False, type='int')
+            transition_days = dict(default=None, required=False, type='int'),
+            transition_date = dict(default=None, required=False, type='str')
         )
     )
 
-    module = AnsibleModule(argument_spec=argument_spec)
+    module = AnsibleModule(argument_spec=argument_spec,
+                           mutually_exclusive = [
+                                                 [ 'expiration_days', 'expiration_date' ],
+                                                 [ 'expiration_days', 'transition_date' ],
+                                                 [ 'transition_days', 'transition_date' ],
+                                                 [ 'transition_days', 'expiration_date' ]                 
+                                                 ]
+                           )
 
     if not HAS_BOTO:
         module.fail_json(msg='boto required for this module')
@@ -333,8 +364,24 @@ def main():
     else:
         module.fail_json(msg="region must be specified")
 
+    expiration_date = module.params.get("expiration_date")
+    transition_date = module.params.get("transition_date")
     state = module.params.get("state")
 
+    # If expiration_date set, check string is valid
+    if expiration_date is not None:
+        try:
+            dateutil.parser.parse(expiration_date)
+        except ValueError, e:
+            module.fail_json(msg="expiration_date is not valid ISO-8601 format")
+    
+    if transition_date is not None:
+        try:
+            dateutil.parser.parse(transition_date)
+        except ValueError, e:
+            module.fail_json(msg="transition_date is not valid ISO-8601 format")
+        
+        
     if state == 'present':
         create_lifecycle_rule(connection, module)
     elif state == 'absent':
