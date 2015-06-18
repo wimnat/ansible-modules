@@ -89,26 +89,27 @@ try:
 except ImportError:
     HAS_BOTO = False
     
-def get_error_message(xml_string):
+def get_error_message(passed_e):
     
-    root = ET.fromstring(xml_string)
+    xml_string = passed_e.args[2]
+    
+    try:
+        root = ET.fromstring(xml_string)
+    except ET.ParseError, e:
+        return passed_e
     for message in root.findall('.//Message'):            
         return message.text
     
-def get_error_code(xml_string):
+def get_error_code(passed_e):
     
-    root = ET.fromstring(xml_string)
+    xml_string = passed_e.args[2]
+    
+    try:
+        root = ET.fromstring(xml_string)
+    except ET.ParseError, e:
+        return passed_e
     for message in root.findall('.//Code'):            
         return message.text
-
-def get_location(region):
-    
-    if region == "us-west-1":
-        return "USWest"
-    elif region == "us-west-2":
-        return "USWest2"
-    else:
-        return "DEFAULT"
 
 def get_request_payment_status(bucket):
     
@@ -138,7 +139,7 @@ def create_bucket(connection, module):
             bucket = connection.create_bucket(name, location=region)
             changed = True
         except Exception, e:
-            module.fail_json(msg=str(get_error_message(e.args[2])))
+            module.fail_json(msg=str(get_error_message(e)))
     
     # Versioning
     versioning_status = bucket.get_versioning_status()
@@ -148,7 +149,7 @@ def create_bucket(connection, module):
             changed = True
             versioning_status = bucket.get_versioning_status()
         except Exception, e:
-            module.fail_json(msg=str(get_error_message(e.args[2])))
+            module.fail_json(msg=str(get_error_message(e)))
     elif not versioning_status and not versioning:
         # do nothing
         pass
@@ -178,11 +179,11 @@ def create_bucket(connection, module):
     try:
         current_policy = bucket.get_policy()
     except S3ResponseError, e:
-        error_code = get_error_code(e.args[2])
+        error_code = get_error_code(e)
         if error_code == "NoSuchBucketPolicy":
             current_policy = None
         else:
-            module.fail_json(debug=x, msg=str(get_error_message(e.args[2])))
+            module.fail_json(debug=x, msg=str(get_error_message(e)))
     
     if current_policy is not None and policy is not None:
         x = "1"
@@ -195,7 +196,7 @@ def create_bucket(connection, module):
                 changed = True
                 current_policy = bucket.get_policy()
             except S3ResponseError, e:
-                module.fail_json(msg=str(get_error_message(e.args[2])))
+                module.fail_json(msg=str(get_error_message(e)))
 
     elif current_policy is None and policy is not None:
         x = "2"
@@ -206,7 +207,7 @@ def create_bucket(connection, module):
             changed = True
             current_policy = bucket.get_policy()
         except S3ResponseError, e:
-            module.fail_json(msg=str(get_error_message(e.args[2])))
+            module.fail_json(msg=str(get_error_message(e)))
     
     elif current_policy is not None and policy is None:
         x = "3"
@@ -215,11 +216,11 @@ def create_bucket(connection, module):
             changed = True
             current_policy = bucket.get_policy()
         except S3ResponseError, e:
-            error_code = get_error_code(e.args[2])
+            error_code = get_error_code(e)
             if error_code == "NoSuchBucketPolicy":
                 current_policy = None
             else:
-                module.fail_json(msg=str(get_error_message(e.args[2])))
+                module.fail_json(msg=str(get_error_message(e)))
     else:
         x = "4"
             
@@ -230,8 +231,19 @@ def create_bucket(connection, module):
     
 def destroy_bucket(connection, module):
     
+    force = module.params.get("force")
     name = module.params.get("name")
     changed = False
+    
+    try:
+        bucket = connection.get_bucket(name)
+    except S3ResponseError, e:
+        error_message = str(get_error_message(e))
+        if "404 Not Found" not in error_message:
+            module.fail_json(msg=str(get_error_message(e)))
+        else:
+            # Bucket already absent
+            module.exit_json(changed=changed)
     
     if force:
         try:
@@ -240,16 +252,15 @@ def destroy_bucket(connection, module):
                 key.delete()
                 
         except BotoServerError, e:
-            module.fail_json(msg=str(get_error_message(e.args[2])))
+            module.fail_json(msg=str(get_error_message(e)))
     
     try:
         bucket = connection.delete_bucket(name)
         changed = True
-        print bucket
     except Exception, e:
-        module.fail_json(msg=str(get_error_message(e.args[2])))
+        module.fail_json(msg=str(get_error_message(e)))
         
-    
+    module.exit_json(changed=changed)
     
 def main():
     
