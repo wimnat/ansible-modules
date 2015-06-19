@@ -34,7 +34,7 @@ options:
     default: null
   expiration_date:
     description:
-      - Indicates the lifetime of the objects that are subject to the rule by the date they will expire. The value must be ISO-8601 format and the time must be midnight GST.
+      - Indicates the lifetime of the objects that are subject to the rule by the date they will expire. The value must be ISO-8601 format and the time must be midnight GMT.
     required: true
     default: null  
   expiration_days:
@@ -72,7 +72,7 @@ options:
     choices: [ 'glacier' ]
   transition_date:
     description:
-      - Indicates the lifetime of the objects that are subject to the rule by the date they will transition to a different storage class. The value must be ISO-8601 format and the time must be midnight GST.
+      - Indicates the lifetime of the objects that are subject to the rule by the date they will transition to a different storage class. The value must be ISO-8601 format and the time must be midnight GMT.
     required: true
     default: null
   transition_days:
@@ -90,7 +90,7 @@ EXAMPLES = '''
 # Configure a lifecycle rule on a bucket to expire (delete) items with a prefix of /logs/ after 30 days
 - s3_lifecycle:
     name: mybucket
-    expiration: 30
+    expiration_days: 30
     prefix: /logs/
     status: enabled
     state: present
@@ -98,8 +98,17 @@ EXAMPLES = '''
 # Configure a lifecycle rule to transition all items with a prefix of /logs/ to glacier after 7 days and then delete after 90 days
 - s3_lifecycle:
     name: mybucket
-    transition: 7
-    expiration: 90
+    transition_days: 7
+    expiration_days: 90
+    prefix: /logs/
+    status: enabled
+    state: present
+    
+# Configure a lifecycle rule to transition all items with a prefix of /logs/ to glacier on 31 Dec 2020 and then delete on 31 Dec 2030. Note that midnight GMT must be specified.
+- s3_lifecycle:
+    name: mybucket
+    transition_date: 2020-12-30T00:00:00
+    expiration_date: 2030-12-30T00:00:00
     prefix: /logs/
     status: enabled
     state: present
@@ -120,7 +129,12 @@ EXAMPLES = '''
 '''
 
 import xml.etree.ElementTree as ET
-import dateutil.parser
+
+try:
+    import dateutil.parser
+    HAS_DATEUTIL = True
+except ImportError:
+    HAS_DATEUTIL = False
 
 try:
     import boto.ec2
@@ -353,6 +367,9 @@ def main():
 
     if not HAS_BOTO:
         module.fail_json(msg='boto required for this module')
+        
+    if not HAS_DATEUTIL:
+        module.fail_json(msg='dateutil required for this module')    
 
     region, ec2_url, aws_connect_params = get_aws_connection_info(module)
 
