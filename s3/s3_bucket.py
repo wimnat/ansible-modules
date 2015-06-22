@@ -50,6 +50,11 @@ options:
     required: false
     default: present
     choices: [ 'present', 'absent' ]
+  tags:
+    description:
+      - tags dict to apply to bucket
+    required: false
+    default: null
   versioning:
     description: 
       - Whether versioning is enabled or disabled (note that once versioning is enabled, it can only be suspended)
@@ -80,9 +85,7 @@ import xml.etree.ElementTree as ET
 try:
     import boto.ec2
     from boto.s3.connection import OrdinaryCallingFormat
-    from boto.s3.website import RedirectLocation
-    from boto.s3.website import RoutingRules
-    from boto.s3.website import RoutingRule
+    from boto.s3.tagging import TagSet
     from boto.exception import BotoServerError
     from boto.exception import S3CreateError, S3ResponseError
     HAS_BOTO = True
@@ -128,8 +131,9 @@ def create_bucket(connection, module):
     policy = module.params.get("policy")
     name = module.params.get("name")
     region = module.params.get("region")
-    versioning = module.params.get("versioning")
     requester_pays = module.params.get("requester_pays")
+    tags = module.params.get("tags")
+    versioning = module.params.get("versioning")
     changed = False
     
     try:
@@ -226,12 +230,61 @@ def create_bucket(connection, module):
     # Tags
     try:
         current_tags = bucket.get_tags()
+        tag_obj = TagSet()
     except S3ResponseError, e:
-        module.fail_json(msg=str(get_error_message(e)))
-    
-    print tags    
-     
-    module.exit_json(changed=changed, name=bucket.name, versioning=versioning_status, requester_pays=requester_pays_status, policy=current_policy)
+        error_code = get_error_code(e)
+        if error_code == "NoSuchTagSet":
+            current_tags = None
+        else:
+            module.fail_json(msg=str(get_error_message(e)))
+
+    #print ', '.join(current_tags)
+    '''
+    print current_tags.__dict__
+    '''
+    for x in current_tags():
+        #print x.__dict__
+        print x
+        #print x.value
+
+    sys.exit(0)
+    '''
+    if current_tags is not None and tags is not None:
+        if tags is not None:
+
+            policy = json.dumps(policy)
+
+        if json.loads(current_policy) != json.loads(policy):
+            try:
+                bucket.set_policy(policy)
+                changed = True
+                current_policy = bucket.get_policy()
+            except S3ResponseError, e:
+                module.fail_json(msg=str(get_error_message(e)))
+
+    elif current_policy is None and policy is not None:
+        policy = json.dumps(policy)
+
+        try:
+            bucket.set_policy(policy)
+            changed = True
+            current_policy = bucket.get_policy()
+        except S3ResponseError, e:
+            module.fail_json(msg=str(get_error_message(e)))
+
+    elif current_policy is not None and policy is None:
+        try:
+            bucket.delete_policy()
+            changed = True
+            current_policy = bucket.get_policy()
+        except S3ResponseError, e:
+            error_code = get_error_code(e)
+            if error_code == "NoSuchBucketPolicy":
+                current_policy = None
+            else:
+                module.fail_json(msg=str(get_error_message(e)))
+    '''
+    module.exit_json(changed=changed, name=bucket.name, versioning=versioning_status, requester_pays=requester_pays_status, policy=current_policy, tags=current_tags)
     
 def destroy_bucket(connection, module):
     
@@ -276,6 +329,7 @@ def main():
             name = dict(required=True),
             requester_pays = dict(default='no', type='bool'),
             state = dict(default='present', choices=['present', 'absent']),
+            tags = dict(required=None, default=None, type='dict'),
             versioning = dict(default='no', type='bool')
         )
     )
