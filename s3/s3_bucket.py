@@ -183,10 +183,9 @@ def create_bucket(connection, module):
         if error_code == "NoSuchBucketPolicy":
             current_policy = None
         else:
-            module.fail_json(debug=x, msg=str(get_error_message(e)))
+            module.fail_json(msg=str(get_error_message(e)))
     
     if current_policy is not None and policy is not None:
-        x = "1"
         if policy is not None:
             policy = json.dumps(policy)
             
@@ -199,7 +198,6 @@ def create_bucket(connection, module):
                 module.fail_json(msg=str(get_error_message(e)))
 
     elif current_policy is None and policy is not None:
-        x = "2"
         policy = json.dumps(policy)
             
         try:
@@ -210,7 +208,6 @@ def create_bucket(connection, module):
             module.fail_json(msg=str(get_error_message(e)))
     
     elif current_policy is not None and policy is None:
-        x = "3"
         try:
             bucket.delete_policy()
             changed = True
@@ -221,13 +218,20 @@ def create_bucket(connection, module):
                 current_policy = None
             else:
                 module.fail_json(msg=str(get_error_message(e)))
-    else:
-        x = "4"
             
     ####
     ## Fix up json of policy so it's not escaped
-    ####        
-    module.exit_json(debug=x, changed=changed, name=bucket.name, versioning=versioning_status, requester_pays=requester_pays_status, policy=current_policy)
+    ####
+    
+    # Tags
+    try:
+        current_tags = bucket.get_tags()
+    except S3ResponseError, e:
+        module.fail_json(msg=str(get_error_message(e)))
+    
+    print tags    
+     
+    module.exit_json(changed=changed, name=bucket.name, versioning=versioning_status, requester_pays=requester_pays_status, policy=current_policy)
     
 def destroy_bucket(connection, module):
     
