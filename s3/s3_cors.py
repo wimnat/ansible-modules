@@ -15,37 +15,33 @@
 
 DOCUMENTATION = '''
 ---
-module: s3_lifecycle
-short_description: Manage s3 bucket lifecycle rules in AWS
+module: s3_cors
+short_description: Manage s3 bucket CORS (Cross-Origin Resource Sharing) rules in AWS
 description:
-    - Manage s3 bucket lifecycle rules in AWS
+    - Manage s3 bucket CORS (Cross-Origin Resource Sharing) rules in AWS
 version_added: "2.0"
 author: Rob White (@wimnat)
-notes:
-  - If specifying expiration time as days then transition time must also be specified in days
-  - If specifying expiration time as a date then transition time must also be specified as a date
-requirements:
-  - python-dateutil
 options:
   name:
     description:
       - Name of the s3 bucket
     required: true
     default: null
-  expiration_date:
+  allowed_header:
     description:
-      - Indicates the lifetime of the objects that are subject to the rule by the date they will expire. The value must be ISO-8601 format and the time must be midnight GMT.
-    required: true
-    default: null  
-  expiration_days:
-    description:
-      - Indicates the lifetime, in days, of the objects that are subject to the rule. The value must be a non-zero positive integer.
+      - Specifies which headers are allowed in a pre-flight OPTIONS request via the Access-Control-Request-Headers header. Each header name specified in the Access-Control-Request-Headers header must have a corresponding entry in the rule. Amazon S3 will send only the allowed headers in a response that were requested. This can contain at most one * wild character.
     required: true
     default: null
-  prefix:
+  allowed_methods:
     description:
-      - Prefix identifying one or more objects to which the rule applies.
-      required: false
+      - An HTTP method that you want to allow the origin to execute. At least one method must be specified.
+    required: true
+    default: null
+    choices: [ 'get', 'put', 'head', 'post', 'delete' ]
+  allowed_origin:
+    description:
+      - An origin that you want to allow cross-domain requests from. This can contain at most one * wild character.
+      required: true
       default: null
   rule_id:
     description:
@@ -54,30 +50,18 @@ options:
       default: null
   state:
     description:
-      - Create or remove the lifecycle rule
+      - Create or remove the CORS rule
     required: false
     default: present
     choices: [ 'present', 'absent' ]
-  status:
+  max_age_seconds:
     description:
-      - If 'enabled', the rule is currently being applied. If 'disabled', the rule is not currently being applied.
+      - Time in seconds that the browser should cache the pre-flight response for the specified resource.
     required: false
-    default: enabled
-    choices: [ 'enabled', 'disabled' ]
-  storage_class:
-    description:
-      - The storage class to transition to. Currently there is only one valid value - 'glacier'.
-    required: false
-    default: glacier
-    choices: [ 'glacier' ]
-  transition_date:
-    description:
-      - Indicates the lifetime of the objects that are subject to the rule by the date they will transition to a different storage class. The value must be ISO-8601 format and the time must be midnight GMT.
-    required: true
     default: null
-  transition_days:
+  expose_header:
     description:
-      - Indicates when, in days, an object transitions to a different storage class.
+      - One or more headers in the response that you want customers to be able to access from their applications (for example, from a JavaScript XMLHttpRequest object). You add one ExposeHeader element in the rule for each header.
     required: false
     default: null
 
@@ -87,59 +71,16 @@ extends_documentation_fragment: aws
 EXAMPLES = '''
 # Note: These examples do not set authentication details, see the AWS Guide for details.
 
-# Configure a lifecycle rule on a bucket to expire (delete) items with a prefix of /logs/ after 30 days
-- s3_lifecycle:
-    name: mybucket
-    expiration_days: 30
-    prefix: /logs/
-    status: enabled
-    state: present
-    
-# Configure a lifecycle rule to transition all items with a prefix of /logs/ to glacier after 7 days and then delete after 90 days
-- s3_lifecycle:
-    name: mybucket
-    transition_days: 7
-    expiration_days: 90
-    prefix: /logs/
-    status: enabled
-    state: present
-    
-# Configure a lifecycle rule to transition all items with a prefix of /logs/ to glacier on 31 Dec 2020 and then delete on 31 Dec 2030. Note that midnight GMT must be specified.
-- s3_lifecycle:
-    name: mybucket
-    transition_date: 2020-12-30T00:00:00
-    expiration_date: 2030-12-30T00:00:00
-    prefix: /logs/
-    status: enabled
-    state: present
-    
-# Disable the rule created above
-- s3_lifecycle:
-    name: mybucket
-    prefix: /logs/
-    status: disabled
-    state: present
-    
-# Delete the lifecycle rule created above
-- s3_lifecycle:
-    name: mybucket
-    prefix: /logs/
-    state: absent
+
     
 '''
 
 import xml.etree.ElementTree as ET
 
 try:
-    import dateutil.parser
-    HAS_DATEUTIL = True
-except ImportError:
-    HAS_DATEUTIL = False
-
-try:
     import boto.ec2
     from boto.s3.connection import OrdinaryCallingFormat
-    from boto.s3.lifecycle import Lifecycle, Expiration, Transition, Rule
+    from boto.s3.cors import CORSConfiguration
     from boto.exception import BotoServerError
     from boto.exception import S3CreateError, S3ResponseError
     HAS_BOTO = True
@@ -185,30 +126,38 @@ class Transition(Transition):
     def __ne__(self, other):
         return not self.__eq__(other)        
 
-def get_error_message(xml_string):
-
-    root = ET.fromstring(xml_string)
-    for message in root.findall('.//Message'):
+def get_error_message(passed_e):
+    
+    xml_string = passed_e.args[2]
+    
+    try:
+        root = ET.fromstring(xml_string)
+    except ET.ParseError, e:
+        return passed_e
+    for message in root.findall('.//Message'):            
         return message.text
-
-def get_error_code(xml_string):
-
-    root = ET.fromstring(xml_string)
-    for message in root.findall('.//Code'):
+    
+def get_error_code(passed_e):
+    
+    xml_string = passed_e.args[2]
+    
+    try:
+        root = ET.fromstring(xml_string)
+    except ET.ParseError, e:
+        return passed_e
+    for message in root.findall('.//Code'):            
         return message.text
 
 
 def create_lifecycle_rule(connection, module):
 
     name = module.params.get("name")
-    expiration_date = module.params.get("expiration_date")
-    expiration_days = module.params.get("expiration_days")
+    expiration = module.params.get("expiration")
     prefix = module.params.get("prefix")
     rule_id = module.params.get("rule_id")
     status = module.params.get("status")
     storage_class = module.params.get("storage_class")
-    transition_date = module.params.get("transition_date")
-    transition_days = module.params.get("transition_days")
+    transition = module.params.get("transition")
     changed = False
 
     try:
@@ -227,18 +176,14 @@ def create_lifecycle_rule(connection, module):
             module.fail_json(debug=x, msg=str(get_error_message(e.args[2])))
 
     # Create expiration
-    if expiration_days is not None:
-        expiration_obj = Expiration(days=expiration_days)
-    elif expiration_date is not None:
-        expiration_obj = Expiration(date=expiration_date)
+    if expiration is not None:
+        expiration_obj = Expiration(days=expiration)
     else:
         expiration_obj = None
     
     # Create transition
-    if transition_days is not None:
-        transition_obj = Transition(days=transition_days, storage_class=storage_class.upper())
-    elif transition_date is not None:
-        transition_obj = Transition(date=transition_date, storage_class=storage_class.upper())
+    if transition is not None:
+        transition_obj = Transition(days=transition, storage_class=storage_class.upper())
     else:
         transition_obj = None
     
@@ -343,33 +288,20 @@ def main():
     argument_spec.update(
         dict(
             name = dict(required=True),
-            expiration_days = dict(default=None, required=False, type='int'),
-            expiration_date = dict(default=None, required=False, type='str'),
-            prefix = dict(default=None, required=False),
-            requester_pays = dict(default='no', type='bool'),
-            rule_id = dict(required=False),
+            allowed_header = dict(default=None, required=False, type='list'),
+            allowed_methods = dict(default=None, required=True, choices=['get', 'put', 'head', 'post', 'delete']),
+            allowed_origin = dict(default='no', required=True, type='str'),
+            rule_id = dict(default=None, required=False),
             state = dict(default='present', choices=['present', 'absent']),
-            status = dict(default='enabled', choices=['enabled', 'disabled']),
-            storage_class = dict(default='glacier', choices=['glacier']),
-            transition_days = dict(default=None, required=False, type='int'),
-            transition_date = dict(default=None, required=False, type='str')
+            max_age_seconds = dict(default=None, type='int'),
+            expose_header = dict(default=None)
         )
     )
 
-    module = AnsibleModule(argument_spec=argument_spec,
-                           mutually_exclusive = [
-                                                 [ 'expiration_days', 'expiration_date' ],
-                                                 [ 'expiration_days', 'transition_date' ],
-                                                 [ 'transition_days', 'transition_date' ],
-                                                 [ 'transition_days', 'expiration_date' ]                 
-                                                 ]
-                           )
+    module = AnsibleModule(argument_spec=argument_spec)
 
     if not HAS_BOTO:
         module.fail_json(msg='boto required for this module')
-        
-    if not HAS_DATEUTIL:
-        module.fail_json(msg='dateutil required for this module')    
 
     region, ec2_url, aws_connect_params = get_aws_connection_info(module)
 
@@ -381,28 +313,12 @@ def main():
     else:
         module.fail_json(msg="region must be specified")
 
-    expiration_date = module.params.get("expiration_date")
-    transition_date = module.params.get("transition_date")
     state = module.params.get("state")
 
-    # If expiration_date set, check string is valid
-    if expiration_date is not None:
-        try:
-            dateutil.parser.parse(expiration_date)
-        except ValueError, e:
-            module.fail_json(msg="expiration_date is not valid ISO-8601 format")
-    
-    if transition_date is not None:
-        try:
-            dateutil.parser.parse(transition_date)
-        except ValueError, e:
-            module.fail_json(msg="transition_date is not valid ISO-8601 format")
-        
-        
     if state == 'present':
-        create_lifecycle_rule(connection, module)
+        create_cors_rule(connection, module)
     elif state == 'absent':
-        destroy_lifecycle_rule(connection, module)
+        destroy_cors_rule(connection, module)
 
 from ansible.module_utils.basic import *
 from ansible.module_utils.ec2 import *
