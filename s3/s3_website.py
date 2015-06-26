@@ -24,7 +24,7 @@ author: Rob White (@wimnat)
 options:
   name:
     description:
-      - s3 bucket name
+      - Name of the s3 bucket
     required: true
     default: null 
   error_key:
@@ -53,6 +53,8 @@ extends_documentation_fragment: aws
 '''
 
 EXAMPLES = '''
+# Note: These examples do not set authentication details, see the AWS Guide for details.
+
 # Configure an s3 bucket to redirect all requests to example.com
 - s3_website:
     bucket: mybucket.com
@@ -64,16 +66,11 @@ EXAMPLES = '''
     bucket: mybucket.com
     state: absent
     
-# Configure an s3 bucket as a website with index and error pages and a routing rule set
+# Configure an s3 bucket as a website with index and error pages
 - s3_website:
     bucket: mybucket.com
-    suffix: index.htm
+    suffix: home.htm
     error_key: errors/404.htm
-    routing_rules:
-      docs/:
-        replace_key_prefix: documents/
-      blog/:
-        hostname: blogspace.com
     state: present
     
 '''
@@ -83,9 +80,7 @@ import xml.etree.ElementTree as ET
 try:
     import boto.ec2
     from boto.s3.connection import OrdinaryCallingFormat
-    from boto.s3.website import RedirectLocation
-    from boto.s3.website import RoutingRules
-    from boto.s3.website import RoutingRule
+    from boto.s3.website import RedirectLocation, RoutingRules, RoutingRule
     from boto.exception import BotoServerError
     HAS_BOTO = True
 except ImportError:
@@ -97,35 +92,6 @@ def get_error_message(xml_string):
     for message in root.findall('.//Message'):            
         return message.text
 
-def make_routing_rules_object(routing_rules):
-    
-    routing_rules_list = []
-    for key, value in routing_rules.iteritems():
-        if "hostname" in value:
-            hostname = value.get("hostname")
-        else:
-            hostname = None
-        if "protocol" in value:
-            protocol = value.get("protocol")
-        else:
-            protocol = None
-        if "replace_key" in value:
-            replace_key = value.get("replace_key")
-        else:
-            replace_key = None
-        if "replace_key_prefix" in value:
-            replace_key_prefix = value.get("replace_key_prefix")
-        else:
-            replace_key_prefix = None
-        if "http_redirect_code" in value:
-            http_redirect_code = value.get("http_redirect_code")
-        else:
-            http_redirect_code = None
-           
-        routing_rules_list.append(RoutingRule.when(key_prefix=key).then_redirect(hostname, protocol, replace_key, replace_key_prefix, http_redirect_code))
-    
-    return RoutingRules(routing_rules_list)
-
 def enable_bucket_as_website(connection, module):
     
     bucket_name = module.params.get("name")
@@ -133,7 +99,6 @@ def enable_bucket_as_website(connection, module):
     error_key = module.params.get("error_key")
     if error_key == "None":
         error_key = None
-    routing_rules = module.params.get("routing_rules")
     redirect_all_requests = module.params.get("redirect_all_requests")
     changed = False
     
@@ -142,16 +107,11 @@ def enable_bucket_as_website(connection, module):
     else:
         redirect_location = None
     
-    if routing_rules is not None:
-        routing_rules_object = make_routing_rules_object(routing_rules)
-    else:
-        routing_rules_object = None
-    
     try:
         bucket = connection.get_bucket(bucket_name)
         if compare_bucket_as_website(bucket, module) is False:
             bucket.delete_website_configuration()
-            bucket.configure_website(suffix, error_key, redirect_location, routing_rules_object)
+            bucket.configure_website(suffix, error_key, redirect_location)
             changed = True
     except BotoServerError as e:
         module.fail_json(msg=get_error_message(e.args[2]))
@@ -181,15 +141,11 @@ def compare_bucket_as_website(bucket, module):
     
     suffix = module.params.get("suffix")
     error_key = module.params.get("error_key")
-    routing_rules = module.params.get("routing_rules")
     redirect_all_requests = module.params.get("redirect_all_requests")
 
     try:
         website_config = bucket.get_website_configuration()
         bucket_equal = False
-        
-        #print "error key *******"
-        #print website_config
         
         try:
             if suffix == website_config.IndexDocument.Suffix or suffix is None:
@@ -225,9 +181,6 @@ def compare_bucket_as_website(bucket, module):
                     bucket_equal = False
             except AttributeError:
                 bucket_equal = False
-        #else:
-        #    if hasattr(website_config, 'RedirectAllRequestsTo.HostName') is False:
-        #        bucket_equal = False
         
     except BotoServerError as e:
         msg = get_error_message(e.args[2])
@@ -281,7 +234,6 @@ def main():
     elif state == 'absent':
         disable_bucket_as_website(connection, module)
         
-
 
 from ansible.module_utils.basic import *
 from ansible.module_utils.ec2 import *

@@ -28,17 +28,17 @@ options:
     required: false
     default: no
     choices: [ 'yes', 'no' ]
+  name:
+    description:
+      - Name of the s3 bucket
+    required: true
+    default: null
   policy:
     description:
       - The JSON policy as a string.
     required: false
     default: null
-  name:
-    description:
-      - Name of the s3 bucket
-    required: false
-    default: null
-  requestor_pays
+  requestor_pays:
     description:
       - With Requester Pays buckets, the requester instead of the bucket owner pays the cost of the request and the data download from the bucket.
     required: false
