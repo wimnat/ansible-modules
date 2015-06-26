@@ -46,7 +46,7 @@ options:
   rule_id:
     description:
       - Unique identifier for the rule. The value cannot be longer than 255 characters. A unique value for the rule will be generated if no value is provided.
-      required: false
+      required: true
       default: null
   state:
     description:
@@ -80,7 +80,7 @@ import xml.etree.ElementTree as ET
 try:
     import boto.ec2
     from boto.s3.connection import OrdinaryCallingFormat
-    from boto.s3.cors import CORSConfiguration
+    from boto.s3.cors import CORSRule, CORSConfiguration
     from boto.exception import BotoServerError
     from boto.exception import S3CreateError, S3ResponseError
     HAS_BOTO = True
@@ -149,49 +149,37 @@ def get_error_code(passed_e):
         return message.text
 
 
-def create_lifecycle_rule(connection, module):
+def create_cors_rule(connection, module):
 
     name = module.params.get("name")
-    expiration = module.params.get("expiration")
-    prefix = module.params.get("prefix")
+    allowed_header = module.params.get("allowed_header")
+    allowed_methods = module.params.get("allowed_methods")
+    allowed_origin = module.params.get("allowed_origin")
     rule_id = module.params.get("rule_id")
-    status = module.params.get("status")
-    storage_class = module.params.get("storage_class")
-    transition = module.params.get("transition")
+    max_age_seconds = module.params.get("max_age_seconds")
+    expose_header = module.params.get("expose_header")
     changed = False
 
     try:
         bucket = connection.get_bucket(name)
     except S3ResponseError, e:
-        module.fail_json(msg=str(get_error_message(e.args[2])))
+        module.fail_json(msg=str(get_error_message(e)))
 
-    # Get the bucket's current lifecycle rules
+    # Get the bucket's current CORS rules
     try:
-        current_lifecycle_obj = bucket.get_lifecycle_config()
-    except S3ResponseError, e:
+        current_lifecycle_obj = bucket.get_cors()
         error_code = get_error_code(e.args[2])
+    except S3ResponseError, e:
         if error_code == "NoSuchLifecycleConfiguration":
-            current_lifecycle_obj = Lifecycle()
+            current_cors_obj = CORSConfiguration()
         else:
-            module.fail_json(debug=x, msg=str(get_error_message(e.args[2])))
+            module.fail_json(msg=str(get_error_message(e)))
 
-    # Create expiration
-    if expiration is not None:
-        expiration_obj = Expiration(days=expiration)
-    else:
-        expiration_obj = None
-    
-    # Create transition
-    if transition is not None:
-        transition_obj = Transition(days=transition, storage_class=storage_class.upper())
-    else:
-        transition_obj = None
-    
-    # Create rule
-    rule = Rule(rule_id, prefix, status.title(), expiration_obj, transition_obj)
-    
+    # Create CORS rule
+    cors_rule = CORSRule(allowed_method=allowed_methods, allowed_origin=allowed_origin, id=rule_id, allowed_header=allowed_header, max_age_seconds=max_age_seconds, expose_header=expose_header)
+
     # Create lifecycle
-    lifecycle_obj = Lifecycle()
+    cors_obj = CORSConfiguration()
     
     # Check if rule exists
     # If an ID exists, use that otherwise compare based on prefix

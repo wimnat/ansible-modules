@@ -93,7 +93,7 @@ except ImportError:
     HAS_BOTO = False
     
 def get_error_message(passed_e):
-    
+
     xml_string = passed_e.args[2]
     
     try:
@@ -237,7 +237,6 @@ def create_bucket(connection, module):
             current_tags = None
         else:
             module.fail_json(msg=str(get_error_message(e)))
-
     
     if current_tags is not None and tags is not None:
         
