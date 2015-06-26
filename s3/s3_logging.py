@@ -30,7 +30,7 @@ options:
   target_bucket:
     description:
       - The bucket to log to.
-    required: true
+    required: false
     default: null
   target_prefix:
     description:
@@ -83,7 +83,7 @@ def get_error_message(passed_e):
     try:
         root = ET.fromstring(xml_string)
     except ET.ParseError, e:
-        return passed_e
+        return passed_e.message
     for message in root.findall('.//Message'):            
         return message.text
     
@@ -94,15 +94,17 @@ def get_error_code(passed_e):
     try:
         root = ET.fromstring(xml_string)
     except ET.ParseError, e:
-        return passed_e
+        return passed_e.error_code
     for message in root.findall('.//Code'):            
         return message.text
 
 def compare_bucket_logging(bucket, target_bucket, target_prefix):
     
     bucket_log_obj = bucket.get_logging_status()
-    print bucket_log_obj.__dict
-    return False
+    if bucket_log_obj.target != target_bucket or bucket_log_obj.prefix != target_prefix:
+        return False
+    else:
+        return True
     
 
 def enable_bucket_logging(connection, module):
@@ -117,10 +119,17 @@ def enable_bucket_logging(connection, module):
     try:
         bucket = connection.get_bucket(bucket_name)
         if not compare_bucket_logging(bucket, target_bucket, target_prefix):
+            # Before we can enable logging we must give the log-delivery group WRITE and READ_ACP permissions to the target bucket
+            try:
+                target_bucket_obj = connection.get_bucket(target_bucket)
+                target_bucket_obj.set_as_logging_target()
+            except S3ResponseError as e:
+                module.fail_json(msg=get_error_message(e))
+                
             bucket.enable_logging(target_bucket, target_prefix)
             changed = True
-    except BotoServerError as e:
-        module.fail_json(msg=get_error_message(e.args[2]))
+    except S3ResponseError as e:
+        module.fail_json(msg=get_error_message(e))
     
     #module.exit_json(changed=changed, config=website_config)
     module.exit_json(changed=changed)
@@ -128,13 +137,27 @@ def enable_bucket_logging(connection, module):
     
 def disable_bucket_logging(connection, module):
     
+    bucket_name = module.params.get("name")
+    changed = False
+    
+    try:
+        bucket = connection.get_bucket(bucket_name)
+        if not compare_bucket_logging(bucket, None, None):
+            bucket.disable_logging()
+            changed = True
+    except S3ResponseError as e:
+        module.fail_json(msg=get_error_message(e))
+   
+    module.exit_json(changed=changed)
+    
+    
 def main():
     
     argument_spec = ec2_argument_spec()
     argument_spec.update(
         dict(
             name = dict(required=True, default=None),
-            target_bucket = dict(required=True, default=None),
+            target_bucket = dict(required=False, default=None),
             target_prefix = dict(required=False, default=None),
             state = dict(required=False, default='present', choices=['present', 'absent'])
         )
@@ -158,9 +181,9 @@ def main():
     state = module.params.get("state")
 
     if state == 'present':
-        create_bucket(connection, module)
+        enable_bucket_logging(connection, module)
     elif state == 'absent':
-        destroy_bucket(connection, module)
+        disable_bucket_logging(connection, module)
 
 from ansible.module_utils.basic import *
 from ansible.module_utils.ec2 import *
