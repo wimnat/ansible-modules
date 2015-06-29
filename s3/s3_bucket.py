@@ -40,11 +40,14 @@ options:
     default: null
   region:
     description:
-      - The AWS region to use.  Must be specified if ec2_url is not used. If not specified then the value of the EC2_REGION environment variable, if any, is used. See U(http://docs.aws.amazon.com/general/latest/gr/rande.html#ec2_region)
+     - AWS region to create the bucket in. If not set then the value of the AWS_REGION and EC2_REGION environment variables are checked, followed by the aws_region and ec2_region settings in the Boto config file.  If none of those are set the region defaults to the S3 Location: US Standard.
     required: false
     default: null
-    aliases: [ 'aws_region', 'ec2_region' ]
-  requestor_pays:
+  s3_url:
+    description: S3 URL endpoint for usage with Eucalypus, fakes3, etc.  Otherwise assumes AWS
+    default: null
+    aliases: [ S3_URL ]
+  requester_pays:
     description:
       - With Requester Pays buckets, the requester instead of the bucket owner pays the cost of the request and the data download from the bucket.
     required: false
@@ -74,15 +77,25 @@ extends_documentation_fragment: aws
 EXAMPLES = '''
 # Note: These examples do not set authentication details, see the AWS Guide for details.
 
-- name: Create an s3 bucket
-  s3_bucket:
+# Create a simple s3 bucket
+- s3_bucket:
     name: mys3bucket
-    state: present
 
-- name: Remove an s3 bucket
-  s3_bucket:
+# Remove an s3 bucket and any keys it contains
+- s3_bucket:
     name: mys3bucket
     state: absent
+    force: yes
+
+# Create a bucket, add a policy from a file, enable requester pays, enable versioning and tag
+- s3_bucket:
+    name: mys3bucket
+    policy: "{{ lookup('file','policy.json') }}"
+    requester_pays: yes
+    versioning: yes
+    tags:
+      example: tag1
+      another: tag2
     
 '''
 
@@ -279,7 +292,24 @@ def destroy_bucket(connection, module):
         module.fail_json(msg=e.message)
         
     module.exit_json(changed=changed)
-    
+
+def is_fakes3(s3_url):
+    """ Return True if s3_url has scheme fakes3:// """
+    if s3_url is not None:
+        return urlparse.urlparse(s3_url).scheme in ('fakes3', 'fakes3s')
+    else:
+        return False
+
+def is_walrus(s3_url):
+    """ Return True if it's Walrus endpoint, not S3
+
+    We assume anything other than *.amazonaws.com is Walrus"""
+    if s3_url is not None:
+        o = urlparse.urlparse(s3_url)
+        return not o.hostname.endswith('amazonaws.com')
+    else:
+        return False
+
 def main():
     
     argument_spec = ec2_argument_spec()
@@ -289,6 +319,7 @@ def main():
             policy = dict(required=False, default=None),
             name = dict(required=True),
             requester_pays = dict(default='no', type='bool'),
+            s3_url = dict(aliases=['S3_URL']),
             state = dict(default='present', choices=['present', 'absent']),
             tags = dict(required=None, default={}, type='dict'),
             versioning = dict(default='no', type='bool')
@@ -302,13 +333,48 @@ def main():
     
     region, ec2_url, aws_connect_params = get_aws_connection_info(module)
 
-    if region:
-        try:
-            connection = connect_to_aws(boto.s3, region, **aws_connect_params)
-        except (boto.exception.NoAuthHandlerFound, StandardError), e:
-            module.fail_json(msg=str(e))
+    if region in ('us-east-1', '', None):
+        # S3ism for the US Standard region
+        location = Location.DEFAULT
     else:
-        module.fail_json(msg="region must be specified")
+        # Boto uses symbolic names for locations but region strings will
+        # actually work fine for everything except us-east-1 (US Standard)
+        location = region
+
+    s3_url = module.params.get('s3_url')
+
+    # allow eucarc environment variables to be used if ansible vars aren't set
+    if not s3_url and 'S3_URL' in os.environ:
+        s3_url = os.environ['S3_URL']
+
+    # Look at s3_url and tweak connection settings
+    # if connecting to Walrus or fakes3
+    try:
+        if is_fakes3(s3_url):
+            fakes3 = urlparse.urlparse(s3_url)
+            connection = S3Connection(
+                is_secure=fakes3.scheme == 'fakes3s',
+                host=fakes3.hostname,
+                port=fakes3.port,
+                calling_format=OrdinaryCallingFormat(),
+                **aws_connect_params
+            )
+        elif is_walrus(s3_url):
+            walrus = urlparse.urlparse(s3_url).hostname
+            connection = boto.connect_walrus(walrus, **aws_connect_params)
+        else:
+            connection = boto.s3.connect_to_region(location, is_secure=True, calling_format=OrdinaryCallingFormat(), **aws_connect_params)
+            # use this as fallback because connect_to_region seems to fail in boto + non 'classic' aws accounts in some cases
+            if connection is None:
+                connection = boto.connect_s3(**aws_connect_params)
+
+    except boto.exception.NoAuthHandlerFound, e:
+        module.fail_json(msg='No Authentication Handler found: %s ' % str(e))
+    except Exception, e:
+        module.fail_json(msg='Failed to connect to S3: %s' % str(e))
+
+    if connection is None: # this should never happen
+        module.fail_json(msg ='Unknown error, failed to create s3 connection, no information from boto.')
 
     state = module.params.get("state")
 
