@@ -126,6 +126,16 @@ def get_request_payment_status(bucket):
     else:
         return True
 
+def create_tag_set(tags):
+
+    tag_set = TagSet()
+    tags_obj = Tags()
+    for key, val in tags.iteritems():
+        tag_set.add_tag(key, val)
+
+    tags_obj.add_tag_set(tag_set)
+    return tags_obj
+
 def create_bucket(connection, module):
     
     policy = module.params.get("policy")
@@ -238,27 +248,24 @@ def create_bucket(connection, module):
         else:
             module.fail_json(msg=str(get_error_message(e)))
     
-    if current_tags is not None and tags is not None:
-        
-        appended = False
-        # If tag key is present and value is equal, add and don't report changed
-        for tag_k, tag_v in tags.iteritems():
-            for current_tag in current_tags[0]:
-                if current_tag.key == tag_k and current_tag.value == tag_v:
-                    # Add tag to tag_set but report no change
-                    tag_set.add_tag(tag_k, tag_v)
-                    appended = True
-                elif current_tag.key == tag_k and current_tag.value != tag_v:
-                    tag_set.add_tag(tag_k, tag_v)
-                    appended = True
-                    changed = True
-            
-            if not appended:
-                tag_set.add_tag(tag_k, tag_v)
-            
-        
+    if current_tags is not None or tags is not None:
+       
+        if current_tags is None:
+            current_tags_dict = {}
+        else:
+            current_tags_dict = dict((t.key, t.value) for t in current_tags[0])
 
-                
+        if sorted(current_tags_dict) != sorted(tags):
+            try:
+                if tags:
+                    bucket.set_tags(create_tag_set(tags))
+                else:
+                    bucket.delete_tags()
+                current_tags_dict = tags
+                changed = True
+            except S3ResponseError, e:
+                module.fail_json(debug="x", msg=str(get_error_message(e)))
+
     
     '''
     elif current_policy is None and policy is not None:
@@ -283,7 +290,7 @@ def create_bucket(connection, module):
             else:
                 module.fail_json(msg=str(get_error_message(e)))
     '''
-    module.exit_json(changed=changed, name=bucket.name, versioning=versioning_status, requester_pays=requester_pays_status, policy=current_policy, tags=current_tags)
+    module.exit_json(changed=changed, name=bucket.name, versioning=versioning_status, requester_pays=requester_pays_status, policy=current_policy, tags=current_tags_dict)
     
 def destroy_bucket(connection, module):
     
@@ -328,7 +335,7 @@ def main():
             name = dict(required=True),
             requester_pays = dict(default='no', type='bool'),
             state = dict(default='present', choices=['present', 'absent']),
-            tags = dict(required=None, default=None, type='dict'),
+            tags = dict(required=None, default={}, type='dict'),
             versioning = dict(default='no', type='bool')
         )
     )
