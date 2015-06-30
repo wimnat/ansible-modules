@@ -37,6 +37,11 @@ options:
       - Describes the redirect behavior for every request to this s3 bucket website endpoint 
     required: false
     default: null
+  region:
+    description:
+     - AWS region to create the bucket in. If not set then the value of the AWS_REGION and EC2_REGION environment variables are checked, followed by the aws_region and ec2_region settings in the Boto config file.  If none of those are set the region defaults to the S3 Location: US Standard.
+    required: false
+    default: null
   state:
     description:
       - Add or remove s3 website configuration
@@ -57,18 +62,18 @@ EXAMPLES = '''
 
 # Configure an s3 bucket to redirect all requests to example.com
 - s3_website:
-    bucket: mybucket.com
+    name: mybucket.com
     redirect_all_requests: example.com
     state: present
 
 # Remove website configuration from an s3 bucket
 - s3_website:
-    bucket: mybucket.com
+    name: mybucket.com
     state: absent
     
 # Configure an s3 bucket as a website with index and error pages
 - s3_website:
-    bucket: mybucket.com
+    name: mybucket.com
     suffix: home.htm
     error_key: errors/404.htm
     state: present
@@ -86,11 +91,6 @@ try:
 except ImportError:
     HAS_BOTO = False
 
-def get_error_message(xml_string):
-    
-    root = ET.fromstring(xml_string)
-    for message in root.findall('.//Message'):            
-        return message.text
 
 def enable_bucket_as_website(connection, module):
     
@@ -114,7 +114,7 @@ def enable_bucket_as_website(connection, module):
             bucket.configure_website(suffix, error_key, redirect_location)
             changed = True
     except BotoServerError as e:
-        module.fail_json(msg=get_error_message(e.args[2]))
+        module.fail_json(msg=e.message)
     
     website_config = get_website_conf_plus(bucket)
     module.exit_json(changed=changed, config=website_config)
@@ -129,11 +129,10 @@ def disable_bucket_as_website(connection, module):
         bucket.delete_website_configuration()
         changed = True
     except BotoServerError as e:
-        msg = get_error_message(e.args[2])
-        if msg == "The specified bucket does not have a website configuration":
+        if e.message == "The specified bucket does not have a website configuration":
             changed = False
         else:
-            module.fail_json(msg=get_error_message(e.args[2]))
+            module.fail_json(msg=e.message)
     
     module.exit_json(changed=changed, config={})
     
@@ -183,8 +182,7 @@ def compare_bucket_as_website(bucket, module):
                 bucket_equal = False
         
     except BotoServerError as e:
-        msg = get_error_message(e.args[2])
-        if msg == "The specified bucket does not have a website configuration":
+        if e.message == "The specified bucket does not have a website configuration":
             bucket_equal = False
      
     return bucket_equal
@@ -201,10 +199,10 @@ def main():
     argument_spec.update(
         dict(
             name = dict(required=True),
-            state = dict(default='present', choices=['present', 'absent']),
-            suffix = dict(default='index.html'),
-            error_key = dict(),
-            redirect_all_requests = dict()
+            state = dict(required=False, default='present', choices=['present', 'absent']),
+            suffix = dict(required=False, default='index.html'),
+            error_key = dict(required=False),
+            redirect_all_requests = dict(required=False)
         )
     )
     
@@ -219,13 +217,20 @@ def main():
     
     region, ec2_url, aws_connect_params = get_aws_connection_info(module)
 
-    if region:
-        try:
-            connection = connect_to_aws(boto.s3, region, **aws_connect_params)
-        except (boto.exception.NoAuthHandlerFound, StandardError), e:
-            module.fail_json(msg=str(e))
+    if region in ('us-east-1', '', None):
+    # S3ism for the US Standard region
+        location = Location.DEFAULT
     else:
-        module.fail_json(msg="region must be specified")
+        # Boto uses symbolic names for locations but region strings will
+        # actually work fine for everything except us-east-1 (US Standard)
+        location = region
+    try:
+        connection = boto.s3.connect_to_region(location, is_secure=True, calling_format=OrdinaryCallingFormat(), **aws_connect_params)
+        # use this as fallback because connect_to_region seems to fail in boto + non 'classic' aws accounts in some cases
+        if connection is None:
+            connection = boto.connect_s3(**aws_connect_params)
+    except (boto.exception.NoAuthHandlerFound, StandardError), e:
+        module.fail_json(msg=str(e))
 
     state = module.params.get("state")
 
