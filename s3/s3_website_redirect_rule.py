@@ -21,6 +21,8 @@ description:
     - Configure an s3 bucket website redirect rule
 version_added: "2.0"
 author: Rob White (@wimnat)
+notes:
+  - "A new redirect rule may not be immediately returned by s3 API. This can cause issues if you are adding many rules one after the other. In this case, it is best to add a short wait using the pause module." 
 options:
   name:
     description:
@@ -45,6 +47,11 @@ options:
   hostname:
     description:
       - The hostname to be used in the Location header that is returned in the response.
+    required: false
+    default: null
+  region:
+    description:
+     - AWS region to create the bucket in. If not set then the value of the AWS_REGION and EC2_REGION environment variables are checked, followed by the aws_region and ec2_region settings in the Boto config file.  If none of those are set the region defaults to the S3 Location: US Standard.
     required: false
     default: null
   replace_key_prefix_with:
@@ -74,15 +81,21 @@ extends_documentation_fragment: aws
 EXAMPLES = '''
 # Note: These examples do not set authentication details, see the AWS Guide for details.
 
-# Configure an s3 bucket to redirect all requests from mybucket.com/here to example.com
+# Configure an s3 bucket to redirect all requests from mybucket.com/here to example.com/here
 - s3_website_redirect_rule:
     name: mybucket.com
     key_prefix: /here
     hostname: example.com
     state: present
-    
 
-    
+# Redirect any 404 error to example.com
+- s3_website_redirect_rule:
+    name: mybucket.com
+    http_error_code: 404
+    hostname: example.com
+    replace_key_prefix_with: ""
+    state: present
+
 '''
 
 import xml.etree.ElementTree as ET
@@ -95,20 +108,6 @@ try:
     HAS_BOTO = True
 except ImportError:
     HAS_BOTO = False
-
-
-def get_error_message(xml_string):
-
-    root = ET.fromstring(xml_string)
-    for message in root.findall('.//Message'):
-        return message.text
-
-def get_error_code(xml_string):
-
-    root = ET.fromstring(xml_string)
-    for message in root.findall('.//Code'):
-        return message.text
-
 
 def get_website_redirect_conf(bucket):
 
@@ -134,13 +133,13 @@ def create_redirect_rule(connection, module):
     try:
         bucket = connection.get_bucket(name)
     except S3ResponseError, e:
-        module.fail_json(msg=str(get_error_message(e.args[2])))
+        module.fail_json(msg=e.message)
         
     # Check bucket is configured as website
     try:
         website_config = bucket.get_website_configuration_obj()
     except S3ResponseError, e:
-        module.fail_json(msg=str(get_error_message(e.args[2])))
+        module.fail_json(msg=e.message)
         
     current_redirect_rules = website_config.routing_rules
     
@@ -172,8 +171,8 @@ def create_redirect_rule(connection, module):
         
     try:
         bucket.configure_website(website_config.suffix, website_config.error_key, website_config.redirect_all_requests_to, routing_rules_obj)
-    except BotoServerError, e:
-        module.fail_json(msg=str(get_error_message(e.args[2])))
+    except S3ResponseError, e:
+        module.fail_json(msg=e.message)
         
     module.exit_json(changed=changed, config=get_website_redirect_conf(bucket))
         
@@ -193,13 +192,13 @@ def destroy_redirect_rule(connection, module):
     try:
         bucket = connection.get_bucket(name)
     except S3ResponseError, e:
-        module.fail_json(msg=str(get_error_message(e.args[2])))
+        module.fail_json(msg=e.message)
         
     # Check bucket is configured as website
     try:
         website_config = bucket.get_website_configuration_obj()
     except S3ResponseError, e:
-        module.fail_json(msg=str(get_error_message(e.args[2])))
+        module.fail_json(msg=e.message)
         
     current_redirect_rules = website_config.routing_rules
     
@@ -219,8 +218,8 @@ def destroy_redirect_rule(connection, module):
             
     try:
         bucket.configure_website(website_config.suffix, website_config.error_key, website_config.redirect_all_requests_to, routing_rules_obj)
-    except BotoServerError, e:
-        module.fail_json(msg=str(get_error_message(e.args[2])))
+    except S3ResponseError, e:
+        module.fail_json(msg=e.message)
         
     module.exit_json(changed=changed, config=get_website_redirect_conf(bucket))
         
@@ -250,13 +249,20 @@ def main():
     
     region, ec2_url, aws_connect_params = get_aws_connection_info(module)
 
-    if region:
-        try:
-            connection = connect_to_aws(boto.s3, region, **aws_connect_params)
-        except (boto.exception.NoAuthHandlerFound, StandardError), e:
-            module.fail_json(msg=str(e))
+    if region in ('us-east-1', '', None):
+    # S3ism for the US Standard region
+        location = Location.DEFAULT
     else:
-        module.fail_json(msg="region must be specified")
+        # Boto uses symbolic names for locations but region strings will
+        # actually work fine for everything except us-east-1 (US Standard)
+        location = region
+    try:
+        connection = boto.s3.connect_to_region(location, is_secure=True, calling_format=OrdinaryCallingFormat(), **aws_connect_params)
+        # use this as fallback because connect_to_region seems to fail in boto + non 'classic' aws accounts in some cases
+        if connection is None:
+            connection = boto.connect_s3(**aws_connect_params)
+    except (boto.exception.NoAuthHandlerFound, StandardError), e:
+        module.fail_json(msg=str(e))
 
     state = module.params.get("state")
 
