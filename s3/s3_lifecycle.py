@@ -129,6 +129,7 @@ EXAMPLES = '''
 '''
 
 import xml.etree.ElementTree as ET
+import copy
 
 try:
     import dateutil.parser
@@ -139,64 +140,11 @@ except ImportError:
 try:
     import boto.ec2
     from boto.s3.connection import OrdinaryCallingFormat
-    from boto.s3.lifecycle import Lifecycle, Expiration, Transition, Rule
-    from boto.exception import BotoServerError
-    from boto.exception import S3CreateError, S3ResponseError
+    from boto.s3.lifecycle import Lifecycle, Rule, Expiration, Transition
+    from boto.exception import BotoServerError, S3CreateError, S3ResponseError
     HAS_BOTO = True
 except ImportError:
     HAS_BOTO = False
-    
-class CommonEqualityMixin(object):
-    
-    def __eq__(self, other):
-        return (isinstance(other, self.__class__)
-            and self.__dict__ == other.__dict__)
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
-
-class Rule(Rule):
-
-    def __eq__(self, other):
-        
-        return self.__dict__ == other.__dict__
-        #return self.status == other.status
-        #return (isinstance(other, self.__class__)
-        #    and self.__dict__ == other.__dict__)
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
-    
-class Expiration(Expiration):
-
-    def __eq__(self, other):
-        return self.__dict__ == other.__dict__
-        #return (isinstance(other, self.__class__)
-        #    and self.__dict__ == other.__dict__)
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
-    
-class Transition(Transition):
-
-    def __eq__(self, other):
-        return self.__dict__ == other.__dict__
-
-    def __ne__(self, other):
-        return not self.__eq__(other)        
-
-def get_error_message(xml_string):
-
-    root = ET.fromstring(xml_string)
-    for message in root.findall('.//Message'):
-        return message.text
-
-def get_error_code(xml_string):
-
-    root = ET.fromstring(xml_string)
-    for message in root.findall('.//Code'):
-        return message.text
-
 
 def create_lifecycle_rule(connection, module):
 
@@ -214,17 +162,16 @@ def create_lifecycle_rule(connection, module):
     try:
         bucket = connection.get_bucket(name)
     except S3ResponseError, e:
-        module.fail_json(msg=str(get_error_message(e.args[2])))
+        module.fail_json(msg=e.message)
 
     # Get the bucket's current lifecycle rules
     try:
         current_lifecycle_obj = bucket.get_lifecycle_config()
     except S3ResponseError, e:
-        error_code = get_error_code(e.args[2])
-        if error_code == "NoSuchLifecycleConfiguration":
+        if e.error_code == "NoSuchLifecycleConfiguration":
             current_lifecycle_obj = Lifecycle()
         else:
-            module.fail_json(debug=x, msg=str(get_error_message(e.args[2])))
+            module.fail_json(msg=e.message)
 
     # Create expiration
     if expiration_days is not None:
@@ -241,21 +188,64 @@ def create_lifecycle_rule(connection, module):
         transition_obj = Transition(date=transition_date, storage_class=storage_class.upper())
     else:
         transition_obj = None
-    
+
     # Create rule
     rule = Rule(rule_id, prefix, status.title(), expiration_obj, transition_obj)
-    
+
     # Create lifecycle
     lifecycle_obj = Lifecycle()
-    
-    # Check if rule exists
-    # If an ID exists, use that otherwise compare based on prefix
-    if rule.id is not None:
+
+    appended = False
+    # If current_lifecycle_obj is not None then we have rules to compare, otherwise just add the rule
+    if current_lifecycle_obj:
+        # If rule ID exists, use that for comparison otherwise compare based on prefix
         for existing_rule in current_lifecycle_obj:
-            if rule.id != existing_rule.id:
-                lifecycle_obj.append(existing_rule)
-            else:
-                lifecycle_obj.append(rule)
+            if rule.id == existing_rule.id:
+                if compare_rule(rule, existing_rule):
+                    lifecycle_obj.append(rule)
+                    appended = True
+                else:
+                    lifecycle_obj.append(rule)
+                    changed = True
+                    appended = True
+            elif rule.prefix == existing_rule.prefix:
+                existing_rule.id = None
+                if compare_rule(rule, existing_rule):
+                    lifecycle_obj.append(rule)
+                    appended = True
+                else:
+                    lifecycle_obj.append(rule)
+                    changed = True
+                    appended = True
+        # If nothing appended then append now as the rule must not exist
+        if not appended:
+            lifecycle_obj.append(rule)
+            changed = True
+    else:
+        lifecycle_obj.append(rule)
+        changed = True
+
+    '''
+    if rule.id is not None:
+        if current_lifecycle_obj:
+            for existing_rule in current_lifecycle_obj:
+                if rule.id != existing_rule.id:
+                    print "id not equal to exiting"
+                    lifecycle_obj.append(existing_rule)
+                    changed = True
+                else:
+                    print rule.__dict__
+                    print existing_rule.__dict__
+                    if rule == existing_rule:
+                        print "eq"
+                        lifecycle_obj.append(rule)
+                    else:
+                        print "not eq"
+                        lifecycle_obj.append(rule)
+                        changed = True
+        else:
+            lifecycle_obj.append(rule)
+            changed = True
     else:
         appended = False
         for existing_rule in current_lifecycle_obj:
@@ -274,18 +264,64 @@ def create_lifecycle_rule(connection, module):
             else:
                 lifecycle_obj.append(existing_rule)
     
-    if not appended:
-        lifecycle_obj.append(rule)
-        changed = True
-        
+        if not appended:
+            lifecycle_obj.append(rule)
+            changed = True
+    '''
+
     # Write lifecycle to bucket
     try:
         bucket.configure_lifecycle(lifecycle_obj)
-    except BotoServerError, e:
-        module.fail_json(msg=str(get_error_message(e.args[2])))
+    except S3ResponseError, e:
+        module.fail_json(msg=e.message)
         
     module.exit_json(changed=changed)
-    
+
+def compare_rule(rule_a, rule_b):
+
+    # Copy objects
+    rule1 = copy.deepcopy(rule_a)
+    rule2 = copy.deepcopy(rule_b)
+
+    # Delete Rule from Rule
+    try:
+        del rule1.Rule
+    except AttributeError:
+        pass
+
+    try:
+        del rule2.Rule
+    except AttributeError:
+        pass
+
+    # Extract Expiration and Transition objects
+    rule1_expiration = rule1.expiration
+    rule1_transition = rule1.transition
+    rule2_expiration = rule2.expiration
+    rule2_transition = rule2.transition
+
+    # Delete the Expiration and Transition objects from the Rule objects
+    del rule1.expiration
+    del rule1.transition
+    del rule2.expiration
+    del rule2.transition
+
+    # Compare
+    if rule1_transition is None:
+        rule1_transition = Transition()
+    if rule2_transition is None:
+        rule2_transition = Transition()
+    if rule1_expiration is None:
+        rule1_expiration = Expiration()
+    if rule2_expiration is None:
+        rule2_expiration = Expiration()
+
+    if (rule1.__dict__ == rule2.__dict__) and (rule1_expiration.__dict__ == rule2_expiration.__dict__) and (rule1_transition.__dict__ == rule2_transition.__dict__):
+        return True
+    else:
+        return False
+
+
 def destroy_lifecycle_rule(connection, module):
 
     name = module.params.get("name")
@@ -293,17 +329,23 @@ def destroy_lifecycle_rule(connection, module):
     rule_id = module.params.get("rule_id")
     changed = False
 
+    if prefix is None:
+        prefix = ""
+
     try:
         bucket = connection.get_bucket(name)
     except S3ResponseError, e:
-        module.fail_json(msg=str(get_error_message(e.args[2])))
+        module.fail_json(msg=e.message)
 
     # Get the bucket's current lifecycle rules
     try:
         current_lifecycle_obj = bucket.get_lifecycle_config()
     except S3ResponseError, e:
-        module.fail_json(msg=str(get_error_message(e.args[2])))
-        
+        if e.error_code == "NoSuchLifecycleConfiguration":
+            module.exit_json(changed=changed)
+        else:
+            module.fail_json(msg=e.message)
+
     # Create lifecycle
     lifecycle_obj = Lifecycle()
     
@@ -332,7 +374,7 @@ def destroy_lifecycle_rule(connection, module):
         else:
             bucket.delete_lifecycle_configuration()
     except BotoServerError, e:
-        module.fail_json(msg=str(get_error_message(e.args[2])))
+        module.fail_json(msg=e.message)
         
     module.exit_json(changed=changed)
     
