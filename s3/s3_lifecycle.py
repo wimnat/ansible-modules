@@ -107,8 +107,8 @@ EXAMPLES = '''
 # Configure a lifecycle rule to transition all items with a prefix of /logs/ to glacier on 31 Dec 2020 and then delete on 31 Dec 2030. Note that midnight GMT must be specified.
 - s3_lifecycle:
     name: mybucket
-    transition_date: 2020-12-30T00:00:00
-    expiration_date: 2030-12-30T00:00:00
+    transition_date: 2020-12-30T00:00:00.000Z
+    expiration_date: 2030-12-30T00:00:00.000Z
     prefix: /logs/
     status: enabled
     state: present
@@ -130,6 +130,7 @@ EXAMPLES = '''
 
 import xml.etree.ElementTree as ET
 import copy
+import datetime
 
 try:
     import dateutil.parser
@@ -430,15 +431,15 @@ def main():
     # If expiration_date set, check string is valid
     if expiration_date is not None:
         try:
-            dateutil.parser.parse(expiration_date)
+            datetime.datetime.strptime(expiration_date, "%Y-%m-%dT%H:%M:%S.000Z")
         except ValueError, e:
-            module.fail_json(msg="expiration_date is not valid ISO-8601 format")
+            module.fail_json(msg="expiration_date is not valid ISO-8601 format. The time must be midnight and a timezone of GMT must be included")
     
     if transition_date is not None:
         try:
-            dateutil.parser.parse(transition_date)
+            datetime.datetime.strptime(transition_date, "%Y-%m-%dT%H:%M:%S.000Z")
         except ValueError, e:
-            module.fail_json(msg="transition_date is not valid ISO-8601 format")
+            module.fail_json(msg="expiration_date is not valid ISO-8601 format. The time must be midnight and a timezone of GMT must be included")
         
         
     if state == 'present':
