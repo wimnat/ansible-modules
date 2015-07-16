@@ -29,55 +29,59 @@ requirements:
 options:
   name:
     description:
-      - Name of the s3 bucket
+      - "Name of the s3 bucket"
     required: true
-    default: null
   expiration_date:
     description:
-      - Indicates the lifetime of the objects that are subject to the rule by the date they will expire. The value must be ISO-8601 format and the time must be midnight GMT.
-    required: true
+      - "Indicates the lifetime of the objects that are subject to the rule by the date they will expire. The value must be ISO-8601 format, the time must be midnight and a GMT timezone must be specified."
+    required: false
     default: null  
   expiration_days:
     description:
-      - Indicates the lifetime, in days, of the objects that are subject to the rule. The value must be a non-zero positive integer.
-    required: true
+      - "Indicates the lifetime, in days, of the objects that are subject to the rule. The value must be a non-zero positive integer."
+    required: false
     default: null
   prefix:
     description:
-      - Prefix identifying one or more objects to which the rule applies.
+      - "Prefix identifying one or more objects to which the rule applies. If no prefix is specified, the rule will apply to the whole bucket."
       required: false
       default: null
+  region:
+    description:
+     - "AWS region to create the bucket in. If not set then the value of the AWS_REGION and EC2_REGION environment variables are checked, followed by the aws_region and ec2_region settings in the Boto config file.  If none of those are set the region defaults to the S3 Location: US Standard."
+    required: false
+    default: null
   rule_id:
     description:
-      - Unique identifier for the rule. The value cannot be longer than 255 characters. A unique value for the rule will be generated if no value is provided.
+      - "Unique identifier for the rule. The value cannot be longer than 255 characters. A unique value for the rule will be generated if no value is provided."
       required: false
       default: null
   state:
     description:
-      - Create or remove the lifecycle rule
+      - "Create or remove the lifecycle rule"
     required: false
     default: present
     choices: [ 'present', 'absent' ]
   status:
     description:
-      - If 'enabled', the rule is currently being applied. If 'disabled', the rule is not currently being applied.
+      - "If 'enabled', the rule is currently being applied. If 'disabled', the rule is not currently being applied."
     required: false
     default: enabled
     choices: [ 'enabled', 'disabled' ]
   storage_class:
     description:
-      - The storage class to transition to. Currently there is only one valid value - 'glacier'.
+      - "The storage class to transition to. Currently there is only one valid value - 'glacier'."
     required: false
     default: glacier
     choices: [ 'glacier' ]
   transition_date:
     description:
-      - Indicates the lifetime of the objects that are subject to the rule by the date they will transition to a different storage class. The value must be ISO-8601 format and the time must be midnight GMT.
-    required: true
+      - "Indicates the lifetime of the objects that are subject to the rule by the date they will transition to a different storage class. The value must be ISO-8601 format, the time must be midnight and a GMT timezone must be specified. If transition_days is not specified, this parameter is required."
+    required: false
     default: null
   transition_days:
     description:
-      - Indicates when, in days, an object transitions to a different storage class.
+      - "Indicates when, in days, an object transitions to a different storage class. If transition_date is not specified, this parameter is required."
     required: false
     default: null
 
@@ -105,10 +109,11 @@ EXAMPLES = '''
     state: present
     
 # Configure a lifecycle rule to transition all items with a prefix of /logs/ to glacier on 31 Dec 2020 and then delete on 31 Dec 2030. Note that midnight GMT must be specified.
+# Be sure to quote your date strings
 - s3_lifecycle:
     name: mybucket
-    transition_date: 2020-12-30T00:00:00.000Z
-    expiration_date: 2030-12-30T00:00:00.000Z
+    transition_date: "2020-12-30T00:00:00.000Z"
+    expiration_date: "2030-12-30T00:00:00.000Z"
     prefix: /logs/
     status: enabled
     state: present
@@ -225,50 +230,6 @@ def create_lifecycle_rule(connection, module):
     else:
         lifecycle_obj.append(rule)
         changed = True
-
-    '''
-    if rule.id is not None:
-        if current_lifecycle_obj:
-            for existing_rule in current_lifecycle_obj:
-                if rule.id != existing_rule.id:
-                    print "id not equal to exiting"
-                    lifecycle_obj.append(existing_rule)
-                    changed = True
-                else:
-                    print rule.__dict__
-                    print existing_rule.__dict__
-                    if rule == existing_rule:
-                        print "eq"
-                        lifecycle_obj.append(rule)
-                    else:
-                        print "not eq"
-                        lifecycle_obj.append(rule)
-                        changed = True
-        else:
-            lifecycle_obj.append(rule)
-            changed = True
-    else:
-        appended = False
-        for existing_rule in current_lifecycle_obj:
-            # Drop the rule ID and Rule object for comparison purposes
-            existing_rule.id = None
-            del existing_rule.Rule
-            
-            if rule.prefix == existing_rule.prefix:
-                if rule == existing_rule:
-                    lifecycle_obj.append(rule)
-                    appended = True
-                else:
-                    lifecycle_obj.append(rule)
-                    changed = True
-                    appended = True
-            else:
-                lifecycle_obj.append(existing_rule)
-    
-        if not appended:
-            lifecycle_obj.append(rule)
-            changed = True
-    '''
 
     # Write lifecycle to bucket
     try:
@@ -415,14 +376,21 @@ def main():
         module.fail_json(msg='dateutil required for this module')    
 
     region, ec2_url, aws_connect_params = get_aws_connection_info(module)
-
-    if region:
-        try:
-            connection = connect_to_aws(boto.s3, region, **aws_connect_params)
-        except (boto.exception.NoAuthHandlerFound, StandardError), e:
-            module.fail_json(msg=str(e))
+    
+    if region in ('us-east-1', '', None):
+        # S3ism for the US Standard region
+        location = Location.DEFAULT
     else:
-        module.fail_json(msg="region must be specified")
+        # Boto uses symbolic names for locations but region strings will
+        # actually work fine for everything except us-east-1 (US Standard)
+        location = region
+    try:
+        connection = boto.s3.connect_to_region(location, is_secure=True, calling_format=OrdinaryCallingFormat(), **aws_connect_params)
+        # use this as fallback because connect_to_region seems to fail in boto + non 'classic' aws accounts in some cases
+        if connection is None:
+            connection = boto.connect_s3(**aws_connect_params)
+    except (boto.exception.NoAuthHandlerFound, StandardError), e:
+        module.fail_json(msg=str(e))
 
     expiration_date = module.params.get("expiration_date")
     transition_date = module.params.get("transition_date")
@@ -433,14 +401,13 @@ def main():
         try:
             datetime.datetime.strptime(expiration_date, "%Y-%m-%dT%H:%M:%S.000Z")
         except ValueError, e:
-            module.fail_json(msg="expiration_date is not valid ISO-8601 format. The time must be midnight and a timezone of GMT must be included")
+            module.fail_json(msg="expiration_date is not a valid ISO-8601 format. The time must be midnight and a timezone of GMT must be included")
     
     if transition_date is not None:
         try:
             datetime.datetime.strptime(transition_date, "%Y-%m-%dT%H:%M:%S.000Z")
         except ValueError, e:
-            module.fail_json(msg="expiration_date is not valid ISO-8601 format. The time must be midnight and a timezone of GMT must be included")
-        
+            module.fail_json(msg="expiration_date is not a valid ISO-8601 format. The time must be midnight and a timezone of GMT must be included")
         
     if state == 'present':
         create_lifecycle_rule(connection, module)
@@ -450,7 +417,5 @@ def main():
 from ansible.module_utils.basic import *
 from ansible.module_utils.ec2 import *
 
-# this is magic, see lib/ansible/module_common.py
-#<<INCLUDE_ANSIBLE_MODULE_COMMON>>
-
-main()
+if __name__ == '__main__':
+    main()
