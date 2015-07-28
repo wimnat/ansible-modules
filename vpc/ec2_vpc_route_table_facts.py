@@ -22,6 +22,17 @@ description:
 version_added: "2.0"
 author: "Rob White (@wimnat)"
 options:
+  filters:
+    description:
+      - A dict of filters to apply. Each dict item consists of a filter key and a filter value. See U(http://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeRouteTables.html) for possible filters.
+    required: false
+    default: null
+  region:
+    description:
+      - The AWS region to use. If not specified then the value of the EC2_REGION environment variable, if any, is used. See U(http://docs.aws.amazon.com/general/latest/gr/rande.html#ec2_region)
+    required: false
+    default: null
+    aliases: [ 'aws_region', 'ec2_region' ]
   route_table_id:
     description:
       - The ID of the route table. Pass this option to gather facts about a particular route table.
@@ -37,9 +48,20 @@ EXAMPLES = '''
 # Gather facts about all VPC route tables
 - ec2_vpc_route_table_facts:
 
-# Gather facts about a particular VPC route table
+# Gather facts about a particular VPC route table using route table ID
 - ec2_vpc_route_table_facts:
-    route_table_id: rtb-00112233
+    filters:
+      - route-table-id: rtb-00112233
+
+# Gather facts about any VPC route table with a tag key Name and value Example
+- ec2_vpc_route_table_facts:
+    filters:
+      - "tag:Name": Example
+
+# Gather facts about any VPC route table within VPC with ID vpc-abcdef00
+- ec2_vpc_route_table_facts:
+    filters:
+      - vpc-id: vpc-abcdef00
 
 '''
 
@@ -67,11 +89,11 @@ def get_route_table_info(route_table):
 
 def list_ec2_vpc_route_tables(connection, module):
 
-    route_table_id = module.params.get("route_table_id")
+    filters = module.params.get("filters")
     route_table_dict_array = []
 
     try:
-        all_route_tables = connection.get_all_route_tables(route_table_id)
+        all_route_tables = connection.get_all_route_tables(filters=filters)
     except BotoServerError as e:
         module.fail_json(msg=e.message)
 
@@ -85,7 +107,7 @@ def main():
     argument_spec = ec2_argument_spec()
     argument_spec.update(
         dict(
-            route_table_id = dict(default=None)
+            filters = dict(default=None, type='dict')
         )
     )
 
