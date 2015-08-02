@@ -185,6 +185,12 @@ def ensure_subnet_present(vpc_conn, vpc_id, cidr, az, tags, check_mode):
     if subnet is None:
         subnet = create_subnet(vpc_conn, vpc_id, cidr, az, check_mode)
         changed = True
+        # Subnet will be None when check_mode is true
+        if subnet is None:
+            return {
+                'changed': changed,
+                'subnet': {}
+            }
 
     if tags != subnet.tags:
         ensure_tags(vpc_conn, subnet.id, tags, False, check_mode)
