@@ -52,26 +52,42 @@ EXAMPLES = '''
 '''
 
 try:
-    import boto.vpc
+    import boto.ec2.elb
     from boto.exception import BotoServerError
     HAS_BOTO = True
 except ImportError:
     HAS_BOTO = False
 
-def get_route_table_info(route_table):
+def get_elb_info(elb):
 
-    # Add any routes to array
-    routes = []
-    for route in route_table.routes:
-        routes.append(route.__dict__)
+#    print elb.__dict__
+    #print "*******************"
+    # Add any instances to array
+    instances = []
+    for instance in elb.instances:
+        instances.append({ 'id': instance.id, 'state': instance.state })
 
-    route_table_info = { 'id': route_table.id,
-                         'routes': routes,
-                         'tags': route_table.tags,
-                         'vpc_id': route_table.vpc_id
-                       }
+    # Health check
+    health_check = { 'target': elb.health_check.target,
+                     'healthy_threshold': elb.health_check.healthy_threshold,
+                     'interval': elb.health_check.interval,
+                     'unhealthy_threshold': elb.health_check.unhealthy_threshold,
+                     'timeout': elb.health_check.timeout
+                   }
 
-    return route_table_info
+    elb_info = { 'subnet': elb.subnets,
+                 'name': elb.name,
+                 'dns_name': elb.dns_name,
+                 #'listeners': elb.listeners,
+                 'health_check': health_check,
+                 'instances': instances,
+                 'availability_zones': elb.availability_zones,
+                 'vpc_id': elb.vpc_id,
+                 'scheme': elb.scheme,
+                 'security_groups': elb.security_groups
+               }
+
+    return elb_info
 
 def list_ec2_elbs(connection, module):
 
@@ -84,10 +100,9 @@ def list_ec2_elbs(connection, module):
         module.fail_json(msg=e.message)
 
     for elb in all_elbs:
-        print elb.__dict__
-        #elb_dict_array.append(get_elb_info(elb))
+        elb_dict_array.append(get_elb_info(elb))
 
-    module.exit_json(route_tables=route_table_dict_array)
+    module.exit_json(elbs=elb_dict_array)
 
 
 def main():
@@ -107,7 +122,7 @@ def main():
 
     if region:
         try:
-            connection = connect_to_aws(boto.ec2, region, **aws_connect_params)
+            connection = connect_to_aws(boto.ec2.elb, region, **aws_connect_params)
         except (boto.exception.NoAuthHandlerFound, StandardError), e:
             module.fail_json(msg=str(e))
     else:
