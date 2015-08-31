@@ -43,20 +43,15 @@ EXAMPLES = '''
 # Gather facts about all VPC DHCP option sets
 - ec2_vpc_dhcp_opts_facts:
 
-# Gather facts about a particular VPC route table using route table ID
-- ec2_vpc_route_table_facts:
+# Gather facts about a particular VPC DHCP options set using option set ID
+- ec2_vpc_dhcp_opts_facts:
     filters:
-      - route-table-id: rtb-00112233
+      - dhcp-options-id: dopt-00112233
 
-# Gather facts about any VPC route table with a tag key Name and value Example
-- ec2_vpc_route_table_facts:
+# Gather facts about any VPC DHCP options set with a tag key Name and value Example
+- ec2_vpc_dhcp_opts_facts:
     filters:
       - "tag:Name": Example
-
-# Gather facts about any VPC route table within VPC with ID vpc-abcdef00
-- ec2_vpc_route_table_facts:
-    filters:
-      - vpc-id: vpc-abcdef00
 
 '''
 
@@ -69,16 +64,10 @@ except ImportError:
 
 def get_dhcp_opt_set_info(dhcp_opt_set):
 
-    # Add any routes to array
-    #routes = []
-    #for route in route_table.routes:
-    #    routes.append(route.__dict__)
-
     dhcp_opt_set_info = { 'id': dhcp_opt_set.id,
-                         'options': dhcp_opt_set.options,
-                         'tags': dhcp_opt_set.tags
-                         #'vpc_id': route_table.vpc_id
-                       }
+                          'options': dhcp_opt_set.options,
+                          'tags': dhcp_opt_set.tags
+                        }
 
     return dhcp_opt_set_info
 
@@ -91,14 +80,11 @@ def list_ec2_vpc_dhcp_option_sets(connection, module):
     try:
         all_dhcp_opt_sets = connection.get_all_dhcp_options(filters=filters)
     except BotoServerError as e:
-        module.fail_json(msg=e.msg)
+        module.fail_json(msg=e.message)
         
     for dhcp_opt_set in all_dhcp_opt_sets:
         dhcp_opts_dict_array.append(get_dhcp_opt_set_info(dhcp_opt_set))
         
-    #for route_table in all_route_tables:
-    #    route_table_dict_array.append(get_route_table_info(route_table))
-
     module.exit_json(dhcp_opt_sets=dhcp_opts_dict_array)
 
     
