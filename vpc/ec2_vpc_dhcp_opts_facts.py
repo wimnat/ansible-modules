@@ -67,20 +67,20 @@ try:
 except ImportError:
     HAS_BOTO = False
 
-def get_route_table_info(route_table):
+def get_dhcp_opt_set_info(dhcp_opt_set):
 
     # Add any routes to array
-    routes = []
-    for route in route_table.routes:
-        routes.append(route.__dict__)
+    #routes = []
+    #for route in route_table.routes:
+    #    routes.append(route.__dict__)
 
-    route_table_info = { 'id': route_table.id,
-                         'routes': routes,
-                         'tags': route_table.tags,
-                         'vpc_id': route_table.vpc_id
+    dhcp_opt_set_info = { 'id': dhcp_opt_set.id,
+                         'options': dhcp_opt_set.options,
+                         'tags': dhcp_opt_set.tags
+                         #'vpc_id': route_table.vpc_id
                        }
 
-    return route_table_info
+    return dhcp_opt_set_info
 
 
 def list_ec2_vpc_dhcp_option_sets(connection, module):
@@ -94,12 +94,12 @@ def list_ec2_vpc_dhcp_option_sets(connection, module):
         module.fail_json(msg=e.msg)
         
     for dhcp_opt_set in all_dhcp_opt_sets:
-        print dhcp_opt_set
+        dhcp_opts_dict_array.append(get_dhcp_opt_set_info(dhcp_opt_set))
         
     #for route_table in all_route_tables:
     #    route_table_dict_array.append(get_route_table_info(route_table))
 
-    #module.exit_json(route_tables=route_table_dict_array)
+    module.exit_json(dhcp_opt_sets=dhcp_opts_dict_array)
 
     
 def main():
