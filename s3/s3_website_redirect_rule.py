@@ -26,51 +26,51 @@ notes:
 options:
   name:
     description:
-      - s3 bucket name
+      - "s3 bucket name"
     required: true
     default: null 
   key_prefix:
     description:
-      - The object key name prefix from which requests will be redirected.
+      - "The object key name prefix from which requests will be redirected."
     required: false
     default: null
   http_error_code:
     description:
-      - The HTTP error code that must match for the redirect to apply. In the event of an error, if the error code meets this value, then specified redirect applies.
+      - "The HTTP error code that must match for the redirect to apply. In the event of an error, if the error code meets this value, then specified redirect applies."
     required: false
   protocol:
     description:
-      - The protocol, http or https, to be used in the Location header that is returned in the response.
+      - "The protocol, http or https, to be used in the Location header that is returned in the response."
     required: false
     default: null
     choices: [ 'http', 'https' ]
   hostname:
     description:
-      - The hostname to be used in the Location header that is returned in the response.
+      - "The hostname to be used in the Location header that is returned in the response."
     required: false
     default: null
   region:
     description:
-     - AWS region to create the bucket in. If not set then the value of the AWS_REGION and EC2_REGION environment variables are checked, followed by the aws_region and ec2_region settings in the Boto config file.  If none of those are set the region defaults to the S3 Location: US Standard.
+     - "AWS region to create the bucket in. If not set then the value of the AWS_REGION and EC2_REGION environment variables are checked, followed by the aws_region and ec2_region settings in the Boto config file.  If none of those are set the region defaults to the S3 Location: US Standard."
     required: false
     default: null
   replace_key_prefix_with:
     description:
-      - The object key name prefix that will replace the value of key_prefix in the redirect request.
+      - "The object key name prefix that will replace the value of key_prefix in the redirect request."
     required: false
     default: null
   replace_key_with:
     description:
-      - The object key to be used in the Location header that is returned in the response.
+      - "The object key to be used in the Location header that is returned in the response."
     required: false
     default: null
   http_redirect_code:
     description:
-      - The HTTP redirect code to be used in the Location header that is returned in the response.
+      - "The HTTP redirect code to be used in the Location header that is returned in the response."
     default: null
   state:
     description:
-      - Add or remove s3 website redirect rule
+      - "Add or remove s3 website redirect rule"
     required: false
     default: present
     choices: [ 'present', 'absent' ]
@@ -102,7 +102,7 @@ import xml.etree.ElementTree as ET
 
 try:
     import boto.ec2
-    from boto.s3.connection import OrdinaryCallingFormat
+    from boto.s3.connection import OrdinaryCallingFormat, Location
     from boto.s3.website import RedirectLocation, RoutingRules, RoutingRule, Redirect, Condition
     from boto.exception import BotoServerError, S3CreateError, S3ResponseError
     HAS_BOTO = True
@@ -275,7 +275,5 @@ def main():
 from ansible.module_utils.basic import *
 from ansible.module_utils.ec2 import *
 
-# this is magic, see lib/ansible/module_common.py
-#<<INCLUDE_ANSIBLE_MODULE_COMMON>>
-
-main()
+if __name__ == '__main__':
+    main()
