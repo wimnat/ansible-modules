@@ -114,7 +114,7 @@ EXAMPLES = '''
 - ec2_vol:
     instance: XXXXXX 
     volume_size: 5 
-    iops: 200
+    iops: 100
     device_name: sdd
 
 # Example using snapshot id
@@ -368,6 +368,7 @@ def get_volume_info(volume, state):
                     'attachment_set': {
                         'attach_time': attachment.attach_time,
                         'device': attachment.device,
+                        'instance_id': attachment.instance_id,
                         'status': attachment.status
                     },
                     'tags': volume.tags
@@ -407,6 +408,10 @@ def main():
     zone = module.params.get('zone')
     snapshot = module.params.get('snapshot')
     state = module.params.get('state')
+    
+    # Ensure we have the zone or can get the zone
+    if id is None and zone is None and state == 'present':
+        module.fail_json(msg="You must specify either instance or zone")
     
     # Set volume detach flag
     if instance == 'None' or instance == '':
