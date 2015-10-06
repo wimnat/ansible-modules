@@ -27,41 +27,35 @@ options:
       - instance ID if you wish to attach the volume. Since 1.9 you can set to None to detach.
     required: false
     default: null
-    aliases: []
   name:
     description:
       - volume Name tag if you wish to attach an existing volume (requires instance)
     required: false
     default: null
-    aliases: []
     version_added: "1.6"
   id:
     description:
       - volume id if you wish to attach an existing volume (requires instance) or remove an existing volume
     required: false
     default: null
-    aliases: []
     version_added: "1.6"
   volume_size:
     description:
       - size of volume (in GB) to create.
     required: false
     default: null
-    aliases: []
   volume_type:
     description:
       - Type of EBS volume; standard (magnetic), gp2 (SSD), io1 (Provisioned IOPS). "Standard" is the old EBS default
         and continues to remain the Ansible default for backwards compatibility. 
     required: false
     default: standard
-    aliases: []
     version_added: "1.9"
   iops:
     description:
       - the provisioned IOPs you want to associate with this volume (integer).
     required: false
     default: 100
-    aliases: []
     version_added: "1.3"
   encrypted:
     description:
@@ -73,7 +67,6 @@ options:
       - device id to override device mapping. Assumes /dev/sdf for Linux/UNIX and /dev/xvdf for Windows.
     required: false
     default: null
-    aliases: []
   region:
     description:
       - The AWS region to use. If not specified then the value of the EC2_REGION environment variable, if any, is used.
@@ -98,7 +91,6 @@ options:
     required: false
     default: "yes"
     choices: ["yes", "no"]
-    aliases: []
     version_added: "1.5"
   state:
     description: 
@@ -193,6 +185,7 @@ from distutils.version import LooseVersion
 
 try:
     import boto.ec2
+    from boto.exception import BotoServerError
     HAS_BOTO = True
 except ImportError:
     HAS_BOTO = False
@@ -234,13 +227,14 @@ def get_volume(module, ec2):
     return vols[0]
 
 def get_volumes(module, ec2):
+    
     instance = module.params.get('instance')
 
-    if not instance:
-        module.fail_json(msg = "Instance must be specified to get volumes")
-
     try:
-        vols = ec2.get_all_volumes(filters={'attachment.instance-id': instance})
+        if not instance:
+            vols = ec2.get_all_volumes()
+        else:
+            vols = ec2.get_all_volumes(filters={'attachment.instance-id': instance})
     except boto.exception.BotoServerError, e:
         module.fail_json(msg = "%s: %s" % (e.error_code, e.error_message))
     return vols
@@ -264,6 +258,7 @@ def boto_supports_volume_encryption():
     """
     return hasattr(boto, 'Version') and LooseVersion(boto.Version) >= LooseVersion('2.29.0')
 
+    
 def create_volume(module, ec2, zone):
     changed = False
     name = module.params.get('name')
@@ -278,25 +273,8 @@ def create_volume(module, ec2, zone):
     if iops:
         volume_type = 'io1'
 
-    if instance == 'None' or instance == '':
-        instance = None
-
     volume = get_volume(module, ec2)
-    if volume:
-        if volume.attachment_state() is not None:
-            if instance is None:
-                return volume
-            adata = volume.attach_data
-            if adata.instance_id != instance:
-                module.fail_json(msg = "Volume %s is already attached to another instance: %s"
-                                 % (name or id, adata.instance_id))
-            else:
-                module.exit_json(msg="Volume %s is already mapped on instance %s: %s" %
-                                 (name or id, adata.instance_id, adata.device),
-                                 volume_id=id,
-                                 device=adata.device,
-                                 changed=False)
-    else:
+    if volume is None:
         try:
             if boto_supports_volume_encryption():
                 volume = ec2.create_volume(volume_size, zone, snapshot, volume_type, iops, encrypted)
@@ -318,55 +296,91 @@ def create_volume(module, ec2, zone):
 
 
 def attach_volume(module, ec2, volume, instance):
+    
     device_name = module.params.get('device_name')
-
-    if device_name and instance:
-        try:
-            attach = volume.attach(instance.id, device_name)
-            while volume.attachment_state() != 'attached':
-                time.sleep(3)
-                volume.update()
-        except boto.exception.BotoServerError, e:
-            module.fail_json(msg = "%s: %s" % (e.error_code, e.error_message))
-
+    changed = False
+    
     # If device_name isn't set, make a choice based on best practices here:
     # http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/block-device-mapping-concepts.html
-
+    
     # In future this needs to be more dynamic but combining block device mapping best practices
     # (bounds for devices, as above) with instance.block_device_mapping data would be tricky. For me ;)
-
+    
     # Use password data attribute to tell whether the instance is Windows or Linux
-    if device_name is None and instance:
+    if device_name is None:
         try:
             if not ec2.get_password_data(instance.id):
                 device_name = '/dev/sdf'
-                attach = volume.attach(instance.id, device_name)
-                while volume.attachment_state() != 'attached':
-                    time.sleep(3)
-                    volume.update()
             else:
                 device_name = '/dev/xvdf'
-                attach = volume.attach(instance.id, device_name)
-                while volume.attachment_state() != 'attached':
-                    time.sleep(3)
-                    volume.update()
+        except boto.exception.BotoServerError, e:
+            module.fail_json(msg = "%s: %s" % (e.error_code, e.error_message))
+    
+    if volume.attachment_state() is not None:
+        adata = volume.attach_data
+        if adata.instance_id != instance.id:
+            module.fail_json(msg = "Volume %s is already attached to another instance: %s"
+                             % (volume.id, adata.instance_id))
+    else:
+        try:
+            volume.attach(instance.id, device_name)
+            while volume.attachment_state() != 'attached':
+                time.sleep(3)
+                volume.update()
+            changed = True
         except boto.exception.BotoServerError, e:
             module.fail_json(msg = "%s: %s" % (e.error_code, e.error_message))
 
-def detach_volume(module, ec2):
-    vol = get_volume(module, ec2)
-    if not vol or vol.attachment_state() is None:
-        module.exit_json(changed=False)
-    else:
-        vol.detach()
-        module.exit_json(changed=True)
+    return volume, changed
+
+def detach_volume(module, ec2, volume):
+    
+    changed = False
+    
+    if volume.attachment_state() is not None:
+        adata = volume.attach_data
+        volume.detach()
+        while volume.attachment_state() is not None:
+            time.sleep(3)
+            volume.update()
+        changed = True
+        
+    return volume, changed
+        
+def get_volume_info(volume, state):
+    
+    # If we're just listing volumes then do nothing, else get the latest update for the volume
+    if state != 'list':
+        volume.update()
+    
+    volume_info = {}
+    attachment = volume.attach_data
+
+    volume_info = {
+                    'create_time': volume.create_time,
+                    'id': volume.id,
+                    'iops': volume.iops,
+                    'size': volume.size,
+                    'snapshot_id': volume.snapshot_id,
+                    'status': volume.status,
+                    'type': volume.type,
+                    'zone': volume.zone,
+                    'attachment_set': {
+                        'attach_time': attachment.attach_time,
+                        'device': attachment.device,
+                        'status': attachment.status
+                    },
+                    'tags': volume.tags
+                }
+    
+    return volume_info
 
 def main():
     argument_spec = ec2_argument_spec()
     argument_spec.update(dict(
             instance = dict(),
             id = dict(),
-            name = dict(default=None),
+            name = dict(),
             volume_size = dict(),
             volume_type = dict(choices=['standard', 'gp2', 'io1'], default='standard'),
             iops = dict(),
@@ -393,8 +407,26 @@ def main():
     zone = module.params.get('zone')
     snapshot = module.params.get('snapshot')
     state = module.params.get('state')
+    
+    # Set volume detach flag
+    if instance == 'None' or instance == '':
+        instance = None
+        detach_vol_flag = True
+    else:
+        detach_vol_flag = False
+        
+    # Set changed flag
+    changed = False
 
-    ec2 = ec2_connect(module)
+    region, ec2_url, aws_connect_params = get_aws_connection_info(module)
+    
+    if region:
+        try:
+            ec2 = connect_to_aws(boto.ec2, region, **aws_connect_params)
+        except (boto.exception.NoAuthHandlerFound, StandardError), e:
+            module.fail_json(msg=str(e))
+    else:
+        module.fail_json(msg="region must be specified")
 
     if state == 'list':
         returned_volumes = []
@@ -403,21 +435,7 @@ def main():
         for v in vols:
             attachment = v.attach_data
 
-            returned_volumes.append({
-                'create_time': v.create_time,
-                'id': v.id,
-                'iops': v.iops,
-                'size': v.size,
-                'snapshot_id': v.snapshot_id,
-                'status': v.status,
-                'type': v.type,
-                'zone': v.zone,
-                'attachment_set': {
-                    'attach_time': attachment.attach_time,
-                    'device': attachment.device,
-                    'status': attachment.status
-                }
-            })
+            returned_volumes.append(get_volume_info(v, state))
 
         module.exit_json(changed=False, volumes=returned_volumes)
 
@@ -428,8 +446,12 @@ def main():
     # instance is specified but zone isn't.
     # Useful for playbooks chaining instance launch with volume create + attach and where the
     # zone doesn't matter to the user.
+    inst = None
     if instance:
-        reservation = ec2.get_all_instances(instance_ids=instance)
+        try:
+            reservation = ec2.get_all_instances(instance_ids=instance)
+        except BotoServerError as e:
+            module.fail_json(msg=e.message)
         inst = reservation[0].instances[0]
         zone = inst.placement
 
@@ -448,22 +470,21 @@ def main():
 
     if volume_size and (id or snapshot):
         module.fail_json(msg="Cannot specify volume_size together with id or snapshot")
-
-    if state == 'absent':
-        delete_volume(module, ec2)
     
-    changed = False
     if state == 'present':
         volume, changed = create_volume(module, ec2, zone)
-        if instance:
-            attach_volume(module, ec2, volume, inst)
-        elif instance == 'None' or instance == '':
-            detach_volume(module, ec2)    
+        if detach_vol_flag:
+            volume, changed = detach_volume(module, ec2, volume)    
+        elif inst is not None:
+            volume, changed = attach_volume(module, ec2, volume, inst)
 
-        module.exit_json(changed=changed, volume_id=volume.id, device=device_name, volume_type=volume.type)
+        module.exit_json(changed=changed, volume=get_volume_info(volume, state))
+    elif state == 'absent':
+        delete_volume(module, ec2)
 
 # import module snippets
 from ansible.module_utils.basic import *
 from ansible.module_utils.ec2 import *
 
 main()
+
