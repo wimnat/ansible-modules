@@ -1,3 +1,6 @@
 .vagrant
+
 .pydevproject
+
 .idea
+id_rsa*

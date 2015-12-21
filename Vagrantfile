@@ -6,13 +6,15 @@
 # backwards compatibility). Please don't change it unless you know what
 # you're doing.
 Vagrant.configure(2) do |config|
+
+  #  ENV["VAGRANT_DETECTED_OS"] = ENV["VAGRANT_DETECTED_OS"].to_s + " cygwin"
   # The most common configuration options are documented and commented below.
   # For a complete reference, please see the online documentation at
   # https://docs.vagrantup.com.
 
   # Every Vagrant development environment requires a box. You can search for
   # boxes at https://atlas.hashicorp.com/search.
-  config.vm.box = "centos/7"
+  config.vm.box = "dummybox-aws"
 
   # Disable automatic box update checking. If you disable this, then
   # boxes will only be checked for updates when the user runs
@@ -68,5 +70,48 @@ Vagrant.configure(2) do |config|
   #   sudo apt-get update
   #   sudo apt-get install -y apache2
   # SHELL
-  config.vm.provision :shell, path: ".vagrant_provisioning/bootstrap.sh"
+
+  config.vm.synced_folder ".", "/opt/codebase/ansible-modules", type: "rsync", rsync__exclude: [".git/", ".idea/"]
+  config.vm.hostname = "stagingbox"
+
+  config.vm.provider :aws do |aws, override|
+
+    # AWS Settings
+    aws.access_key_id = ENV['AWS_ACCESS_KEY']
+    aws.secret_access_key = ENV['AWS_SECRET_KEY']
+    aws.region = "ap-southeast-2"
+
+    aws.associate_public_ip = true
+    #aws.iam_instance_profile_name = iam-ansible
+
+    aws.tags = {
+      'Name' => 'Vagrant-Ansible-Modules',
+    }
+
+    # Override Settings
+    #override.ssh.username = "ec2-user"
+    override.ssh.username = "centos"
+    override.ssh.private_key_path = "id_rsa_wimnat_201509"
+
+    # Oregon
+    aws.region_config "us-west-2" do |region|
+      region.ami = 'ami-f0091d91'
+      # CentOS 7 AMI - ami-d440a6e7
+      region.instance_type = 't2.micro'
+      region.keypair_name = ENV['AWS_KEY_NAME']
+      region.security_groups = "sec-ansible"
+    end
+
+    # Sydney
+    aws.region_config "ap-southeast-2" do |region|
+      # CentOS 7 AMI
+      region.ami = 'ami-d38dc6e9'
+      region.instance_type = 't2.micro'
+      region.keypair_name = ENV['AWS_KEY_NAME']
+      region.security_groups = "sg-92e6d9f7"
+      region.subnet_id = "subnet-2d81ff48"
+    end
+
+  end
+
 end
