@@ -167,6 +167,7 @@ except ImportError:
     HAS_BOTO = False
 
 try:
+    import botocore
     import boto3
     HAS_BOTO3 = True
 except ImportError:
@@ -178,7 +179,13 @@ def check_for_rep_group(module, connection):
 
     params['ReplicationGroupId'] = module.params.get('id')
 
-    result = connection.describe_replication_groups(**params)
+    try:
+        result = connection.describe_replication_groups(**params)
+    except botocore.exceptions.ClientError as e:
+        if e.response['Error']['Code'] == 'ReplicationGroupNotFoundFault':
+            return False
+        else:
+            module.fail_json(msg=e.message)
 
     print result
 
@@ -186,6 +193,7 @@ def create_rep_group(module, connection):
 
     # Does this replication group already exist?
     #connection.
+    print "create group"
 
 
 def destroy_rep_group(module, connection):
@@ -238,8 +246,13 @@ def main():
     except boto.exception.NoAuthHandlerFound, e:
         module.fail_json(msg=str(e))
 
+    state = module.params.get('state')
+
     if state == "present":
-        check_for_rep_group(module, connection)
+        if not check_for_rep_group(module, connection):
+            create_rep_group(module, connection)
+        else:
+            modify_rep_group(module, connection)
     elif state == "absent":
         destroy_rep_group(module, connection)
 
