@@ -199,7 +199,7 @@ def check_for_rep_group(module, connection):
         else:
             module.fail_json(msg=e.message)
 
-    print result
+    return result
 
 
 def create_rep_group(module, connection):
@@ -231,7 +231,7 @@ def create_rep_group(module, connection):
     params['SnapshotWindow'] = module.params.get('snapshot_window')
 
     # Remove any items with a value of None
-    for k,v in params:
+    for k,v in list(params.items()):
         if v is None:
             del params[k]
 
@@ -243,8 +243,9 @@ def create_rep_group(module, connection):
     wait = module.params.get('wait')
     wait_timeout = module.params.get('wait_timeout')
 
+    rep_group = None
     wait_timeout = time.time() + wait_timeout
-    while wait and wait_timeout > time.time() and rep_group is None or rep_group.state != 'available':
+    while wait and wait_timeout > time.time() and rep_group is None or rep_group['state'] != 'available':
         rep_group = connection.describe_replication_groups({'ReplicationGroupId': params['ReplicationGroupId']})['ReplicationGroups'][0]
         print rep_group
         module.exit_json(changed=True, **rep_group)
@@ -259,7 +260,7 @@ def destroy_rep_group(module, connection):
 
 def modify_rep_group(module, connection, rep_group):
 
-    module.exit_json(**rep_group)
+    module.exit_json(replication_group=rep_group['ReplicationGroups'])
 
 
 def main():
@@ -289,7 +290,7 @@ def main():
             notification_topic_arn=dict(default=None, required=False, type='str'),
             state=dict(default=None, choices=['present', 'absent']),
             snapshot_retention_limit=dict(default=0, required=False, type='int'),
-            snapshot_window=dict(default=0, required=False, type='str'),
+            snapshot_window=dict(default=None, required=False, type='str'),
             retain_primary_cluster=dict(default=False, required=False, type='bool'),
             wait=dict(default=False, required=False, type='bool'),
             wait_timeout=dict(default=300, required=False, type='int'),
@@ -297,7 +298,7 @@ def main():
         )
     )
 
-    module = AnsibleModule(argument_spec=argument_spec)
+    module = AnsibleModule(argument_spec=argument_spec, required_one_of=[['primary_cluster_id', 'num_of_cache_clusters']],)
 
     if not HAS_BOTO:
         module.fail_json(msg='boto required for this module')
