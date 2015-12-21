@@ -55,7 +55,7 @@ options:
     description:
       - "The number of cache clusters this replication group will have. If Multi-AZ is enabled (see failover_enabled option), this parameter must be at least 2."
       required: false
-      default: 1
+      default: null
   preferred_cache_cluster_azs:
     description:
       - "A list of EC2 availability zones in which the replication group's cache clusters will be created."
@@ -120,7 +120,7 @@ options:
     description:
       - "The port number on which each member of the replication group will accept connections."
       required: false
-      default: 6379
+      default: null
   notification_topic_arn:
     description:
       - "The Amazon Resource Name (ARN) of the Amazon Simple Notification Service (SNS) topic to which notifications will be sent. The Amazon SNS topic owner must be the same as the cache cluster owner."
@@ -149,6 +149,15 @@ options:
       - "When removing a replication group, if set to true, all of the read replicas will be deleted, but the primary node will be retained."
     required: false
     default: null
+  wait:
+    description: Wait for the replication group to be in state 'available' before returning
+    required: false
+    default: no
+    choices: [ "yes", "no" ]
+  wait_timeout:
+    description: How long before wait gives up, in seconds
+    required: false
+    default: 300
 
 extends_documentation_fragment: aws
 '''
@@ -159,6 +168,8 @@ EXAMPLES = '''
 #
 
 '''
+
+import time
 
 try:
     import boto
@@ -219,16 +230,36 @@ def create_rep_group(module, connection):
     params['SnapshotRetentionLimit'] = module.params.get('snapshot_retention_limit')
     params['SnapshotWindow'] = module.params.get('snapshot_window')
 
+    # Remove any items with a value of None
+    for k,v in params:
+        if v is None:
+            del params[k]
+
     try:
         response = connection.create_replication_group(**params)
     except botocore.exceptions.ClientError as e:
         module.fail_json(msg=e.message)
 
-    module.exit_json(changed=True, **response)
+    wait = module.params.get('wait')
+    wait_timeout = module.params.get('wait_timeout')
+
+    wait_timeout = time.time() + wait_timeout
+    while wait and wait_timeout > time.time() and rep_group is None or rep_group.state != 'available':
+        rep_group = connection.describe_replication_groups({'ReplicationGroupId': params['ReplicationGroupId']})['ReplicationGroups'][0]
+        print rep_group
+        module.exit_json(changed=True, **rep_group)
+    else:
+        module.exit_json(changed=True, **response)
+
 
 def destroy_rep_group(module, connection):
 
     print "x"
+
+
+def modify_rep_group(module, connection, rep_group):
+
+    module.exit_json(**rep_group)
 
 
 def main():
@@ -239,27 +270,30 @@ def main():
             auto_minor_version_upgrade=dict(default=False, required=False, type='bool'),
             id=dict(default=None, required=True, type='str'),
             description=dict(default=None, required=True, type='str'),
-            primary_cluster_id=dict(default="", required=False, type='str'),
+            primary_cluster_id=dict(default=None, required=False, type='str'),
             failover_enabled=dict(default=False, required=False, type='bool'),
-            num_of_cache_clusters=dict(default=1, required=False, type='int'),
-            preferred_cache_cluster_azs=dict(default=[], required=False, type='list'),
-            cache_node_type=dict(default="", required=False, type='str'),
+            num_of_cache_clusters=dict(default=None, required=False, type='int'),
+            preferred_cache_cluster_azs=dict(default=None, required=False, type='list'),
+            cache_node_type=dict(default=None, required=False, type='str'),
             engine=dict(default='redis', required=False, type='str', choices=['redis']),
-            engine_version=dict(default="", required=False, type='str'),
-            cache_parameter_group_name=dict(default="", required=False, type='str'),
-            cache_subnet_group_name=dict(default="", required=False, type='str'),
-            cache_security_group_names=dict(default=[], required=False, type='list'),
-            security_group_ids=dict(default=[], required=False, type='lis'),
-            tags=dict(default={}, required=False, type='dict'),
-            snapshot_arn=dict(default="", required=False, type='str'),
-            snapshot_name=dict(default="", required=False, type='str'),
-            preferred_maintenance_window=dict(default="", required=False, type='str'),
-            port=dict(default=6379, required=False, type='int'),
-            notification_topic_arn=dict(default="", required=False, type='str'),
+            engine_version=dict(default=None, required=False, type='str'),
+            cache_parameter_group_name=dict(default=None, required=False, type='str'),
+            cache_subnet_group_name=dict(default=None, required=False, type='str'),
+            cache_security_group_names=dict(default=None, required=False, type='list'),
+            security_group_ids=dict(default=None, required=False, type='lis'),
+            tags=dict(default=None, required=False, type='dict'),
+            snapshot_arn=dict(default=None, required=False, type='str'),
+            snapshot_name=dict(default=None, required=False, type='str'),
+            preferred_maintenance_window=dict(default=None, required=False, type='str'),
+            port=dict(default=None, required=False, type='int'),
+            notification_topic_arn=dict(default=None, required=False, type='str'),
             state=dict(default=None, choices=['present', 'absent']),
             snapshot_retention_limit=dict(default=0, required=False, type='int'),
             snapshot_window=dict(default=0, required=False, type='str'),
-            retain_primary_cluster=dict(default=False, required=False, type='bool')
+            retain_primary_cluster=dict(default=False, required=False, type='bool'),
+            wait=dict(default=False, required=False, type='bool'),
+            wait_timeout=dict(default=300, required=False, type='int'),
+
         )
     )
 
@@ -280,10 +314,11 @@ def main():
     state = module.params.get('state')
 
     if state == "present":
-        if not check_for_rep_group(module, connection):
+        rep_group = check_for_rep_group(module, connection)
+        if rep_group is False:
             create_rep_group(module, connection)
         else:
-            modify_rep_group(module, connection)
+            modify_rep_group(module, connection, rep_group)
     elif state == "absent":
         destroy_rep_group(module, connection)
 
