@@ -173,6 +173,7 @@ try:
 except ImportError:
     HAS_BOTO3 = False
 
+
 def check_for_rep_group(module, connection):
 
     params = dict()
@@ -189,16 +190,46 @@ def check_for_rep_group(module, connection):
 
     print result
 
+
 def create_rep_group(module, connection):
 
-    # Does this replication group already exist?
-    #connection.
-    print "create group"
+    params = dict()
 
+    params['ReplicationGroupId'] = module.params.get('id')
+    params['ReplicationGroupDescription'] = module.params.get('description')
+    params['PrimaryClusterId'] = module.params.get('primary_cluster_id')
+    params['AutomaticFailoverEnabled'] = module.params.get('failover_enabled')
+    params['NumCacheClusters'] = module.params.get('num_of_cache_clusters')
+    params['PreferredCacheClusterAZs'] = module.params.get('preferred_cache_cluster_azs')
+    params['CacheNodeType'] = module.params.get('cache_node_type')
+    params['Engine'] = module.params.get('engine')
+    params['EngineVersion'] = module.params.get('engine_version')
+    params['CacheParameterGroupName'] = module.params.get('cache_parameter_group_name')
+    params['CacheSubnetGroupName'] = module.params.get('cache_subnet_group_name')
+    params['CacheSecurityGroupNames'] = module.params.get('cache_security_group_names')
+    params['SecurityGroupIds'] = module.params.get('security_group_ids')
+    # need to do stuff here
+    params['Tags'] = module.params.get('tags')
+    # need to do stuff here
+    params['SnapshotArns'] = module.params.get('snapshot_arn')
+    params['PreferredMaintenanceWindow'] = module.params.get('preferred_maintenance_window')
+    params['Port'] = module.params.get('port')
+    params['NotificationTopicArn'] = module.params.get('notification_topic_arn')
+    params['AutoMintorVersionUpgrade'] = module.params.get('auto_minor_version_upgrade')
+    params['snapshot_retention_limit'] = module.params.get('snapshot_retention_limit')
+    params['snapshot_window'] = module.params.get('snapshot_window')
+
+    try:
+        response = connection.create_replication_group(**params)
+    except botocore.exceptions.ClientError as e:
+        module.fail_json(msg=e.message)
+
+    module.exit_json(changed=True, **response)
 
 def destroy_rep_group(module, connection):
 
     print "x"
+
 
 def main():
 
