@@ -154,10 +154,6 @@ options:
     required: false
     default: no
     choices: [ "yes", "no" ]
-  wait_timeout:
-    description: How long before wait gives up, in seconds
-    required: false
-    default: 300
 
 extends_documentation_fragment: aws
 '''
@@ -241,14 +237,12 @@ def create_rep_group(module, connection):
         module.fail_json(msg=e.message)
 
     wait = module.params.get('wait')
-    wait_timeout = module.params.get('wait_timeout')
 
-    rep_group = None
-    wait_timeout = time.time() + wait_timeout
-    while wait and wait_timeout > time.time() and rep_group is None or rep_group['state'] != 'available':
-        rep_group = connection.describe_replication_groups({'ReplicationGroupId': params['ReplicationGroupId']})['ReplicationGroups'][0]
-        print rep_group
-        module.exit_json(changed=True, **rep_group)
+    if wait:
+        waiter = connection.get_waiter('replication_group_available')
+        waiter.wait(ReplicationGroupId=params['ReplicationGroupId'])
+        rep_group = connection.describe_replication_groups({'ReplicationGroupId': params['ReplicationGroupId']})
+        module.exit_json(changed=True, **rep_group['ReplicationGroups'][0])
     else:
         module.exit_json(changed=True, **response)
 
@@ -260,7 +254,10 @@ def destroy_rep_group(module, connection):
 
 def modify_rep_group(module, connection, rep_group):
 
-    module.exit_json(replication_group=rep_group['ReplicationGroups'])
+    changed = False
+
+    #module.exit_json(replication_group=rep_group['ReplicationGroups'])
+    module.exit_json(changed=changed, **rep_group['ReplicationGroups'][0])
 
 
 def main():
