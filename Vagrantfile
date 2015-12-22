@@ -82,8 +82,8 @@ Vagrant.configure(2) do |config|
     aws.secret_access_key = ENV['AWS_SECRET_KEY']
     aws.region = "ap-southeast-2"
 
-    aws.associate_public_ip = true
-    #aws.iam_instance_profile_name = iam-ansible
+    aws.associate_public_ip = "true"
+    aws.iam_instance_profile_name = "iam-ansible"
 
     aws.tags = {
       'Name' => 'Vagrant-Ansible-Modules',

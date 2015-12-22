@@ -149,6 +149,11 @@ options:
       - "When removing a replication group, if set to true, all of the read replicas will be deleted, but the primary node will be retained."
     required: false
     default: null
+  final_snapshot_id:
+    description:
+      - "When removing a replication group, if set, the name of a final node group snapshot."
+    required: false
+    default: null
   wait:
     description: Wait for the replication group to be in state 'available' before returning
     required: false
@@ -249,12 +254,96 @@ def create_rep_group(module, connection):
 
 def destroy_rep_group(module, connection):
 
-    print "x"
+    params = dict()
+
+    params['ReplicationGroupId'] = module.params.get('id')
+    params['RetainPrimaryCluster'] = module.params.get('retain_primary_cluster')
+    params['FinalSnapshotIdentifier'] = module.params.get('final_snapshot_id')
+
+    # Remove any items with a value of None
+    for k,v in list(params.items()):
+        if v is None:
+            del params[k]
+
+    try:
+        result = connection.delete_replication_groups(**params)
+    except botocore.exceptions.ClientError as e:
+        module.fail_json(msg=e.message)
+
+    print result
 
 
 def modify_rep_group(module, connection, rep_group):
 
     changed = False
+
+    params = dict()
+
+    params['ReplicationGroupId'] = module.params.get('id')
+    if params['ReplicationGroupId'] == rep_group['ReplicationGroups'][0]['ReplicationGroupId']:
+        del params['ReplicationGroupId']
+    params['ReplicationGroupDescription'] = module.params.get('description')
+    if params['ReplicationGroupDescription'] == rep_group['ReplicationGroups'][0]['ReplicationGroupDescription']:
+        del params['ReplicationGroupDescription']
+    params['PrimaryClusterId'] = module.params.get('primary_cluster_id')
+    if params['PrimaryClusterId'] == rep_group['ReplicationGroups'][0]['PrimaryClusterId']:
+        del params['PrimaryClusterId']
+    params['AutomaticFailoverEnabled'] = module.params.get('failover_enabled')
+    if params['AutomaticFailoverEnabled'] == rep_group['ReplicationGroups'][0]['AutomaticFailoverEnabled']:
+        del params['AutomaticFailoverEnabled']
+    params['NumCacheClusters'] = module.params.get('num_of_cache_clusters')
+    if params['NumCacheClusters'] == rep_group['ReplicationGroups'][0]['NumCacheClusters']:
+        del params['NumCacheClusters']
+    params['PreferredCacheClusterAZs'] = module.params.get('preferred_cache_cluster_azs')
+    if params['PreferredCacheClusterAZs'] == rep_group['ReplicationGroups'][0]['PreferredCacheClusterAZs']:
+        del params['PreferredCacheClusterAZs']
+    params['CacheNodeType'] = module.params.get('cache_node_type')
+    if params['CacheNodeType'] == rep_group['ReplicationGroups'][0]['CacheNodeType']:
+        del params['CacheNodeType']
+    params['Engine'] = module.params.get('engine')
+    if params['Engine'] == rep_group['ReplicationGroups'][0]['Engine']:
+        del params['Engine']
+    params['EngineVersion'] = module.params.get('engine_version')
+    if params['EngineVersion'] == rep_group['ReplicationGroups'][0]['EngineVersion']:
+        del params['EngineVersion']
+    params['CacheParameterGroupName'] = module.params.get('cache_parameter_group_name')
+    if params['CacheParameterGroupName'] == rep_group['ReplicationGroups'][0]['CacheParameterGroupName']:
+        del params['CacheParameterGroupName']
+    params['CacheSubnetGroupName'] = module.params.get('cache_subnet_group_name')
+    if params['CacheSubnetGroupName'] == rep_group['ReplicationGroups'][0]['CacheSubnetGroupName']:
+        del params['CacheSubnetGroupName']
+    params['CacheSecurityGroupNames'] = module.params.get('cache_security_group_names')
+    if params['CacheSecurityGroupNames'] == rep_group['ReplicationGroups'][0]['CacheSecurityGroupNames']:
+        del params['CacheSecurityGroupNames']
+    params['SecurityGroupIds'] = module.params.get('security_group_ids')
+    if params['SecurityGroupIds'] == rep_group['ReplicationGroups'][0]['SecurityGroupIds']:
+        del params['SecurityGroupIds']
+    # need to do stuff here
+    params['Tags'] = module.params.get('tags')
+    if params['Tags'] == rep_group['ReplicationGroups'][0]['Tags']:
+        del params['Tags']
+    # need to do stuff here
+    params['SnapshotArns'] = module.params.get('snapshot_arn')
+    if params['SnapshotArns'] == rep_group['ReplicationGroups'][0]['SnapshotArns']:
+        del params['SnapshotArns']
+    params['PreferredMaintenanceWindow'] = module.params.get('preferred_maintenance_window')
+    if params['PreferredMaintenanceWindow'] == rep_group['ReplicationGroups'][0]['PreferredMaintenanceWindow']:
+        del params['PreferredMaintenanceWindow']
+    params['Port'] = module.params.get('port')
+    if params['Port'] == rep_group['ReplicationGroups'][0]['Port']:
+        del params['Port']
+    params['NotificationTopicArn'] = module.params.get('notification_topic_arn')
+    if params['NotificationTopicArn'] == rep_group['ReplicationGroups'][0]['NotificationTopicArn']:
+        del params['NotificationTopicArn']
+    params['AutoMinorVersionUpgrade'] = module.params.get('auto_minor_version_upgrade')
+    if params['AutoMinorVersionUpgrade'] == rep_group['ReplicationGroups'][0]['AutoMinorVersionUpgrade']:
+        del params['AutoMinorVersionUpgrade']
+    params['SnapshotRetentionLimit'] = module.params.get('snapshot_retention_limit')
+    if params['SnapshotRetentionLimit'] == rep_group['ReplicationGroups'][0]['SnapshotRetentionLimit']:
+        del params['SnapshotRetentionLimit']
+    params['SnapshotWindow'] = module.params.get('snapshot_window')
+    if params['SnapshotWindow'] == rep_group['ReplicationGroups'][0]['SnapshotWindow']:
+        del params['SnapshotWindow']
 
     #module.exit_json(replication_group=rep_group['ReplicationGroups'])
     module.exit_json(changed=changed, **rep_group['ReplicationGroups'][0])
@@ -289,9 +378,8 @@ def main():
             snapshot_retention_limit=dict(default=0, required=False, type='int'),
             snapshot_window=dict(default=None, required=False, type='str'),
             retain_primary_cluster=dict(default=False, required=False, type='bool'),
+            final_snapshot_id=dict(default=None, required=False, type='str'),
             wait=dict(default=False, required=False, type='bool'),
-            wait_timeout=dict(default=300, required=False, type='int'),
-
         )
     )
 
@@ -318,7 +406,11 @@ def main():
         else:
             modify_rep_group(module, connection, rep_group)
     elif state == "absent":
-        destroy_rep_group(module, connection)
+        rep_group = check_for_rep_group(module, connection)
+        if rep_group is False:
+            module.exit_json(changed=False)
+        else:
+            destroy_rep_group(module, connection)
 
 
 
