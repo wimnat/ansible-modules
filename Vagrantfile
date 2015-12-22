@@ -70,6 +70,7 @@ Vagrant.configure(2) do |config|
   #   sudo apt-get update
   #   sudo apt-get install -y apache2
   # SHELL
+  config.vm.provision :shell, path: ".vagrant_provisioning/bootstrap.sh"
 
   config.vm.synced_folder ".", "/opt/codebase/ansible-modules", type: "rsync", rsync__exclude: [".git/", ".idea/"]
   config.vm.hostname = "stagingbox"

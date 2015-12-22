@@ -1,9 +1,0 @@
----
-- name: Deply role "{{ role }}"
-  hosts: all
-#  connection: local
-  remote_user: "{{ user }}"
-  sudo: yes
-  gather_facts: true
-  roles:
-    - role: "{{ role }}"

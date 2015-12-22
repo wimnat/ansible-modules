@@ -1,28 +1,26 @@
 #!/usr/bin/bash
 
-# Install ansible and other necessary packages
-yum install mlocate git PyYAML libyaml python-babel python-crypto python-ecdsa python-httplib2 python-jinja2 python-keyczar python-markupsafe python-paramiko python-pyasn1 python-six sshpass python-boto python-netaddr
+# Create .ssh folder
+sudo mkdir /root/.ssh
 
-mkdir -p /opt/codebase
+# Copy private key
+sudo cp /opt/codebase/ansible-modules/id_rsa_wimnat_201509 /root/.ssh/id_rsa
 
-cd /opt
+# Ownership and permission of key
+sudo chown root:root /root/.ssh/id_rsa
+sudo chmod 600 /root/.ssh/id_rsa
 
-git clone git://github.com/ansible/ansible.git --recursive
+# Install git
+sudo yum -y install git
 
-cd ansible
+# Add SSH known hosts
+sudo sh -c 'ssh-keyscan bitbucket.org >> /root/.ssh/known_hosts'
+sudo sh -c 'ssh-keyscan github.com >> /root/.ssh/known_hosts'
 
-source ./hacking/env-setup
+# Get scripts repo
+cd /opt/codebase
+sudo git clone git@bitbucket.org:wimnat/scripts.git
 
+# Run setup script
+sudo /bin/bash /opt/codebase/scripts/ansible_on_centos7.sh
 
-
-# Copy private key so Ansible can access itself
-#cp /vagrant/.vagrant/machines/default/virtualbox/private_key /home/vagrant/.ssh/id_rsa
-
-# Correct the ownership of the private key
-#chown vagrant:vagrant /home/vagrant/.ssh/id_rsa
-
-# Disable Ansible host key checking
-#sed -i 's/#host_key_checking = False/host_key_checking = False/g' /etc/ansible/ansible.cfg
-
-# Run the playbook to configure everything else
-#su vagrant -c 'ansible-playbook /vagrant/.vagrant_provisioning/deploy_role.yml -i /vagrant/.vagrant_provisioning/inventories/local --extra-vars "role=ansible user=vagrant"'
