@@ -58,7 +58,7 @@ options:
     description:
       - Time in seconds that the browser should cache the pre-flight response for the specified resource.
     required: false
-    default: null
+    default: 3000
 
 extends_documentation_fragment: aws
 '''
@@ -79,28 +79,71 @@ except ImportError:
 
 def create_cors_rule_dict(module):
 
+    allowed_methods = [m.upper() for m in module.params.get('allowed_methods')]
+
     cors_rule_dict = {}
     cors_rule_dict['AllowedHeaders'] = module.params.get('allowed_headers')
-    cors_rule_dict['AllowedMethods'] = module.params.get('allowed_methods')
+    cors_rule_dict['AllowedMethods'] = allowed_methods
     cors_rule_dict['AllowedOrigins'] = module.params.get('allowed_origins')
-    cors_rule_dict['ExposeHeaders'] = module.params.get('expose_headers')
+    #    cors_rule_dict['ExposeHeaders'] = module.params.get('expose_headers')
     cors_rule_dict['MaxAgeSeconds'] = module.params.get('max_age_seconds')
+
+    #TODO
+    # Remove items that are None
+    #
+
+    return cors_rule_dict
 
 
 
 def create_cors_rule(connection, module):
 
     bucket_name = module.params.get('name')
+    params = {'CORSConfiguration': {'CORSRules': []}}
+    changed = False
 
     # Get bucket current CORS rules
     bucket_cors = connection.BucketCors(bucket_name)
 
     rule = create_cors_rule_dict(module)
 
-    print bucket_cors
+    # Get current CORS rules
+    try:
+        existing_rules = bucket_cors.cors_rules
+    except botocore.exceptions.ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchCORSConfiguration':
+            existing_rules = None
+        else:
+            module.fail_json(mg=e.message)
+
+    appended = False
+    # If current_rules are None then there's no need to compare
+    if existing_rules is not None:
+        for existing_rule in existing_rules:
+            if rule == existing_rule:
+                params['CORSConfiguration']['CORSRules'].append(rule)
+                appended = True
+            else:
+                params['CORSConfiguration']['CORSRules'].append(existing_rule)
+
+    if not appended:
+        params['CORSConfiguration']['CORSRules'].append(rule)
+        changed = True
+
+    try:
+        bucket_cors.put(**params)
+        changed = True
+    except (botocore.exceptions.ParamValidationError, botocore.exceptions.ClientError) as e:
+        module.fail_json(msg=e.message)
+
+    # Update rules
+    bucket_cors.load()
+
+    module.exit_json(changed=changed, cors_rules=bucket_cors.cors_rules)
 
 
 def destroy_cors_rule(connection, module):
+    pass
 
 
 def main():
@@ -113,8 +156,8 @@ def main():
             allowed_methods=dict(default=None, required=True, type='list', choices=['get', 'put', 'head', 'post', 'delete']),
             allowed_origins=dict(default=None, required=True, type='list'),
             expose_headers=dict(default=None, required=False, type='list'),
-            state=dict(default='present', choices=['present', 'absent']),
-            max_age_seconds=dict(default=None, type='int'),
+            state=dict(default=None, choices=['present', 'absent']),
+            max_age_seconds=dict(default=3000, type='int'),
         )
     )
 
@@ -127,14 +170,13 @@ def main():
 
     if region:
         try:
-            connection = boto3_conn(module, conn_type='resource', resource='s3', region=region, endpoint=ec2_url, **aws_connect_kwargs)
+            connection = boto3_conn(module, conn_type='resource', resource='s3', region=region, endpoint=ec2_url, **aws_connect_params)
         except botocore.exceptions.NoCredentialsError as e:
             module.fail_json(msg=e.message)
     else:
         module.fail_json(msg="region must be specified")
 
-    state = module.params.get("state")
-
+    state = module.params.get('state')
     if state == 'present':
         create_cors_rule(connection, module)
     elif state == 'absent':
