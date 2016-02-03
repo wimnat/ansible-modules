@@ -36,6 +36,15 @@ options:
     description:
       - Number of seconds to wait
     required: false
+  managed_policy:
+    description:
+      - A list of managed policies to attach to the role. To embed an inline policy, use M(iam_policy). To remove existing policies, use an empty list item.
+    required: false
+  state:
+    description:
+      - Create or remove the IAM role
+    required: true
+    choices: [ 'present', 'absent' ]
 requirements: [ botocore, boto3 ]
 extends_documentation_fragment:
   - aws
@@ -44,6 +53,33 @@ extends_documentation_fragment:
 EXAMPLES = '''
 # Note: These examples do not set authentication details, see the AWS Guide for details.
 
+# Create a role
+- iam_role:
+    name: mynewrole
+    assume_role_policy_document: lookup()
+    state: present
+
+# Create a role and attach a managed policy called "PowerUserAccess"
+- iam_role:
+    name: mynewrole
+    assume_role_policy_document: lookup()
+    state: present
+    managed_policy:
+      - PowerUserAccess
+
+# Keep the role created above but remove all managed policies
+- iam_role:
+    name: mynewrole
+    assume_role_policy_document: lookup()
+    state: present
+    managed_policy:
+      -
+
+# Delete the role
+- iam_role:
+    name: mynewrole
+    assume_role_policy_document: lookup()
+    state: absent
 
 '''
 RETURN = '''
@@ -96,10 +132,9 @@ def create_role(connection, module):
     params['Path'] = module.params.get('path')
     params['RoleName'] = module.params.get('name')
     params['AssumeRolePolicyDocument'] = module.params.get('assume_role_policy_document')
+    role = get_role(connection, params['RoleName'])
 
-    if compare_role(params, get_role(connection, params['RoleName'])):
-        module.exit_json(changed=False)
-    else:
+    if not compare_role(params, role):
         # Remove any items with a value of None
         for k,v in list(params.items()):
             if v is None:
@@ -110,6 +145,7 @@ def create_role(connection, module):
         except (botocore.exceptions.ClientError, botocore.exceptions.ParamValidationError) as e:
             module.fail_json(msg=e.message)
 
+    if compare_managed_policies(connection, module, role):
         module.exit_json(changed=True, **role)
 
 
@@ -160,6 +196,14 @@ def compare_role(role_params, existing_role):
             return False
     else:
         return False
+
+
+def compare_managed_policies(connection, module, role):
+
+    policy_iterator = role.attached_policies.all()
+    for policy in policy_iterator:
+        print "x"
+        print policy
 
 
 def main():
