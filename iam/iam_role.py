@@ -126,13 +126,26 @@ try:
 except ImportError:
     HAS_BOTO3 = False
 
+def module_output(role):
+
+    role['CreateDate'] = str(role['CreateDate'])
+    return role
+    #print role
+
+
 def create_role(connection, module):
 
     params = dict()
     params['Path'] = module.params.get('path')
     params['RoleName'] = module.params.get('name')
     params['AssumeRolePolicyDocument'] = module.params.get('assume_role_policy_document')
+    managed_policies = module.params.get('managed_policy')
+    changed = False
+
+    # Get role
+    #try:
     role = get_role(connection, params['RoleName'])
+
 
     if not compare_role(params, role):
         # Remove any items with a value of None
@@ -142,11 +155,25 @@ def create_role(connection, module):
         try:
             params['AssumeRolePolicyDocument'] = json.dumps(params['AssumeRolePolicyDocument'])
             role = connection.create_role(**params)
+            changed = True
         except (botocore.exceptions.ClientError, botocore.exceptions.ParamValidationError) as e:
             module.fail_json(msg=e.message)
 
-    if compare_managed_policies(connection, module, role):
-        module.exit_json(changed=True, **role)
+    current_attached_policy_list = get_attached_policy_list(connection, params['RoleName'])
+
+    if not compare_managed_policies(current_attached_policy_list, managed_policies):
+        print 'not equal'
+        # Find the policies currently attached but not specified in the managed_policy attribute
+        set_to_remove = set(managed_policies).intersection(current_attached_policy_list)
+        print set_to_remove
+        #for policy in managed_policies:
+        #    if not policy['name'] in list_of_policies:
+        #        remove policy
+
+        #print 'match managed policies'
+        changed = True
+
+    module.exit_json(changed=changed, **module_output(role))
 
 
 def destroy_role(connection, module):
@@ -179,6 +206,24 @@ def get_role(connection, name):
             module.fail_json(msg=e.message)
 
 
+def get_attached_policy_list(connection, name):
+
+    params = dict()
+    params['RoleName'] = name
+
+    try:
+        attached_role_policies_list = []
+        attached_role_policies = connection.list_attached_role_policies(**params)
+        for policy in attached_role_policies['AttachedPolicies']:
+            attached_role_policies_list.append(policy['PolicyName'])
+        return attached_role_policies_list
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchEntity':
+            return None
+        else:
+            module.fail_json(msg=e.message)
+
+
 def compare_role(role_params, existing_role):
 
     role_params['AssumeRolePolicyDocument'] = json.loads(role_params['AssumeRolePolicyDocument'])
@@ -198,12 +243,15 @@ def compare_role(role_params, existing_role):
         return False
 
 
-def compare_managed_policies(connection, module, role):
+def compare_managed_policies(current_attached_policy_list, managed_policies):
 
-    policy_iterator = role.attached_policies.all()
-    for policy in policy_iterator:
-        print "x"
-        print policy
+    print current_attached_policy_list
+    print managed_policies
+    # If the size of the list is different then we know immediately the managed policies list don't match
+    if cmp(sorted(current_attached_policy_list), sorted(managed_policies)):
+        return True
+    else:
+        return False
 
 
 def main():
@@ -224,6 +272,7 @@ def main():
             name = dict(required=True, type='str'),
             path = dict(default="/", required=False, type='str'),
             assume_role_policy_document = dict(default=default_document, required=False),
+            managed_policy = dict(default=[], required=False, type='list'),
             state = dict(default=None, choices=['present', 'absent'], required=True)
         )
     )
