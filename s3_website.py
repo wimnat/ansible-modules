@@ -26,7 +26,7 @@ options:
     description:
       - "Name of the s3 bucket"
     required: true
-    default: null 
+    default: null
   error_key:
     description:
       - "The object key name to use when a 4XX class error occurs. To remove an error key, set to None."
@@ -53,7 +53,7 @@ options:
       - "Suffix that is appended to a request that is for a directory on the website endpoint (e.g. if the suffix is index.html and you make a request to samplebucket/images/ the data that is returned will be for the object with the key name images/index.html). The suffix must not include a slash character."
     required: false
     default: index.html
-    
+
 extends_documentation_fragment: aws
 '''
 
@@ -70,28 +70,28 @@ EXAMPLES = '''
 - s3_website:
     name: mybucket.com
     state: absent
-    
+
 # Configure an s3 bucket as a website with index and error pages
 - s3_website:
     name: mybucket.com
     suffix: home.htm
     error_key: errors/404.htm
     state: present
-    
+
 '''
 
 try:
     import boto.ec2
     from boto.s3.connection import OrdinaryCallingFormat, Location
     from boto.s3.website import RedirectLocation, RoutingRules, RoutingRule
-    from boto.exception import BotoServerError
+    from boto.exception import BotoServerError, S3ResponseError
     HAS_BOTO = True
 except ImportError:
     HAS_BOTO = False
 
 
 def enable_bucket_as_website(connection, module):
-    
+
     bucket_name = module.params.get("name")
     suffix = module.params.get("suffix")
     error_key = module.params.get("error_key")
@@ -99,28 +99,40 @@ def enable_bucket_as_website(connection, module):
         error_key = None
     redirect_all_requests = module.params.get("redirect_all_requests")
     changed = False
-    
+
     if redirect_all_requests is not None:
         redirect_location = RedirectLocation(hostname=redirect_all_requests)
     else:
         redirect_location = None
-    
+
     try:
         bucket = connection.get_bucket(bucket_name)
+    except S3ResponseError, e:
+        print e
+        if e.get('reason') == 'Moved permanently':
+            print "bucket does not exit"
+        if 'reason' in e:
+            print e['reason']
+        else:
+            print e.__dict__
+
+
+    try:
         if compare_bucket_as_website(bucket, module) is False:
             bucket.delete_website_configuration()
             bucket.configure_website(suffix, error_key, redirect_location)
             changed = True
     except BotoServerError as e:
         module.fail_json(msg=e.message)
-    
+
     website_config = get_website_conf_plus(bucket)
     module.exit_json(changed=changed, config=website_config)
-    
+
+
 def disable_bucket_as_website(connection, module):
-    
+
     bucket_name = module.params.get("name")
-    
+
     try:
         bucket = connection.get_bucket(bucket_name)
         bucket.get_website_configuration()
@@ -131,11 +143,12 @@ def disable_bucket_as_website(connection, module):
             changed = False
         else:
             module.fail_json(msg=e.message)
-    
+
     module.exit_json(changed=changed, config={})
-    
+
+
 def compare_bucket_as_website(bucket, module):
-    
+
     suffix = module.params.get("suffix")
     error_key = module.params.get("error_key")
     redirect_all_requests = module.params.get("redirect_all_requests")
@@ -143,7 +156,7 @@ def compare_bucket_as_website(bucket, module):
     try:
         website_config = bucket.get_website_configuration()
         bucket_equal = False
-        
+
         try:
             if suffix == website_config.IndexDocument.Suffix or suffix is None:
                 bucket_equal = True
@@ -154,7 +167,7 @@ def compare_bucket_as_website(bucket, module):
                 bucket_equal = True
             else:
                 bucket_equal = False
-                
+
         try:
             if error_key == website_config.ErrorDocument.Key or error_key is None:
                 bucket_equal = True
@@ -168,7 +181,7 @@ def compare_bucket_as_website(bucket, module):
                 bucket_equal = True
             else:
                 bucket_equal = False
-        
+
         # Only check if redirect_all_requests is not None
         if redirect_all_requests is not None:
             try:
@@ -178,20 +191,21 @@ def compare_bucket_as_website(bucket, module):
                     bucket_equal = False
             except AttributeError:
                 bucket_equal = False
-        
+
     except BotoServerError as e:
         if e.message == "The specified bucket does not have a website configuration":
             bucket_equal = False
-     
+
     return bucket_equal
 
+
 def get_website_conf_plus(bucket):
-    
+
     website_config = bucket.get_website_configuration()
     website_config['EndPoint'] = bucket.get_website_endpoint()
     return website_config
-            
-    
+
+
 def main():
     argument_spec = ec2_argument_spec()
     argument_spec.update(
@@ -203,20 +217,20 @@ def main():
             redirect_all_requests = dict(required=False)
         )
     )
-    
+
     module = AnsibleModule(argument_spec=argument_spec,
-        mutually_exclusive = [
+                           mutually_exclusive = [
                                ['redirect_all_requests', 'suffix'],
                                ['redirect_all_requests', 'error_key']
-                             ])
+                           ])
 
     if not HAS_BOTO:
         module.fail_json(msg='boto required for this module')
-    
+
     region, ec2_url, aws_connect_params = get_aws_connection_info(module)
 
     if region in ('us-east-1', '', None):
-    # S3ism for the US Standard region
+        # S3ism for the US Standard region
         location = Location.DEFAULT
     else:
         # Boto uses symbolic names for locations but region strings will
@@ -236,7 +250,7 @@ def main():
         enable_bucket_as_website(connection, module)
     elif state == 'absent':
         disable_bucket_as_website(connection, module)
-        
+
 
 from ansible.module_utils.basic import *
 from ansible.module_utils.ec2 import *

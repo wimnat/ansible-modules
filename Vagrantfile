@@ -73,7 +73,10 @@ Vagrant.configure(2) do |config|
   config.vm.provision :shell, path: ".vagrant_provisioning/bootstrap.sh"
 
   config.vm.synced_folder ".", "/opt/codebase/ansible-modules", type: "rsync", rsync__exclude: [".git/", ".idea/"]
-  config.vm.hostname = "stagingbox"
+  config.vm.synced_folder "../ansible-modules-core", "/opt/codebase/ansible-modules-core", type: "rsync", rsync__exclude: [".git/", ".idea/"]
+  config.vm.synced_folder "../ansible-modules-extras", "/opt/codebase/ansible-modules-extras", type: "rsync", rsync__exclude: [".git/", ".idea/"]
+
+  config.vm.hostname = "ansible-testing"
 
   config.vm.provider :aws do |aws, override|
 
