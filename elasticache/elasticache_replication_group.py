@@ -367,7 +367,7 @@ def main():
             cache_parameter_group_name=dict(default=None, required=False, type='str'),
             cache_subnet_group_name=dict(default=None, required=False, type='str'),
             cache_security_group_names=dict(default=None, required=False, type='list'),
-            security_group_ids=dict(default=None, required=False, type='lis'),
+            security_group_ids=dict(default=None, required=False, type='list'),
             tags=dict(default=None, required=False, type='dict'),
             snapshot_arn=dict(default=None, required=False, type='str'),
             snapshot_name=dict(default=None, required=False, type='str'),
